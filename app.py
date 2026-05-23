@@ -432,6 +432,68 @@ def api_latest_permits():
     return jsonify({"permits": permits})
 
 
+# ═══════════════════════════════════════════
+# 运营后台 API
+# ═══════════════════════════════════════════
+
+@app.route("/api/admin/status")
+def api_admin_status():
+    """运营面板：同步状态、数据统计、系统健康"""
+    db = get_db()
+    import os, time as _time
+
+    # 总量
+    total = db.execute("SELECT COUNT(*) as cnt FROM housing_units").fetchone()["cnt"]
+
+    # 状态分布
+    status_rows = db.execute(
+        "SELECT status, COUNT(*) as cnt FROM housing_units "
+        "GROUP BY status ORDER BY cnt DESC"
+    ).fetchall()
+    statuses = {r["status"]: r["cnt"] for r in status_rows}
+
+    # 用途分布（TOP 5）
+    usage_rows = db.execute(
+        "SELECT house_usage, COUNT(*) as cnt FROM housing_units "
+        "GROUP BY house_usage ORDER BY cnt DESC LIMIT 5"
+    ).fetchall()
+
+    # 最近同步（用 created_at 替代 sync_batch，生产表无此列）
+    last_sync = db.execute(
+        "SELECT MAX(created_at) as batch FROM housing_units"
+    ).fetchone()["batch"] or "-"
+
+    # 最近更新日期
+    last_check = db.execute(
+        "SELECT MAX(check_date) as dt FROM housing_units"
+    ).fetchone()["dt"] or "-"
+
+    # 预售证数量
+    permits = db.execute("SELECT COUNT(*) as cnt FROM presale_permits").fetchone()["cnt"]
+
+    # DB 文件大小
+    _db_path = DB_PATH if os.path.exists(DB_PATH) else ""
+    db_size_mb = round(os.path.getsize(_db_path) / 1048576, 1) if _db_path else 0
+
+    # 各区可售住宅
+    zone_rows = db.execute(
+        "SELECT zone, COUNT(*) as cnt FROM housing_units "
+        "WHERE house_usage='住宅' AND status='未售' AND zone != '' "
+        "GROUP BY zone ORDER BY cnt DESC"
+    ).fetchall()
+
+    return jsonify({
+        "total": total,
+        "statuses": statuses,
+        "top_usage": [{"usage": r["house_usage"], "count": r["cnt"]} for r in usage_rows],
+        "last_sync": last_sync,
+        "last_check": last_check,
+        "permits": permits,
+        "db_size_mb": db_size_mb,
+        "zones": [{"name": r["zone"], "unsold": r["cnt"]} for r in zone_rows],
+    })
+
+
 if __name__ == "__main__":
     print("🏠 备案价查询 API 服务启动")
     print(f"   本地访问: http://localhost:5001/")
