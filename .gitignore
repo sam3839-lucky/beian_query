@@ -1,0 +1,30 @@
+# 数据库
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.swp
+*.swo
+
+# 密钥
+*.pem
+*.key
+.env
+.env.*
