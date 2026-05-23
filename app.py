@@ -12,7 +12,7 @@ from pypinyin import pinyin, Style
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-production")
 
-DB_PATH = "/Users/sam/property_clawer/data/property.db"
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "property.db"))
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
