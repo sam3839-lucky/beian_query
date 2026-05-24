@@ -551,7 +551,7 @@ def api_transactions_recent():
         "date": r["report_date"],
         "count": r["cnt"] or 0,
         "area": round(r["area"] or 0, 1),
-    } for r in reversed(rows)]
+    } for r in rows]
 
     return jsonify({"items": items})
 
