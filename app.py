@@ -529,11 +529,15 @@ def api_transactions_districts():
             "GROUP BY d.name ORDER BY cnt DESC", [ptype_id, ym]
         ).fetchall()
         total = sum(r["cnt"] for r in rows)
-        items = [{
+        top8 = [{
             "zone": r["zone"], "count": r["cnt"],
             "pct": round(r["cnt"] / total * 100, 1) if total else 0,
-        } for r in rows[:5]]
-        return {"items": items, "total": total}
+        } for r in rows[:8]]
+        other_cnt = total - sum(i["count"] for i in top8)
+        if other_cnt > 0:
+            top8.append({"zone": "其他", "count": other_cnt,
+                         "pct": round(other_cnt / total * 100, 1) if total else 0})
+        return {"items": top8, "total": total}
 
     return jsonify({"new": query(1), "used": query(2)})
 
