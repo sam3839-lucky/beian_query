@@ -521,7 +521,6 @@ def api_transactions_trends():
         "used": r["used_count"] or 0,
         "area": round(r["area"] or 0, 1),
     } for r in rows]
-    trends.reverse()
     return jsonify({"trends": trends})
 
 
