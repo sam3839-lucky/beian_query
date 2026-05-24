@@ -416,24 +416,45 @@ def api_rankings():
 def api_latest_permits():
     """最新预售证 — 按项目去重，取最新预售证日期，优先有可售房源（共20条）"""
     db = get_db()
-    rows = db.execute(
-        "SELECT p.project_name, MAX(p.developer) as developer, p.zone, "
-        "MAX(p.pass_date) as pass_date, COUNT(h.id) as unsold "
-        "FROM presale_permits p "
-        "LEFT JOIN housing_units h ON h.project_name = p.project_name "
-        f"AND h.house_usage='住宅' AND h.status='未售' AND h.{UNSOLD_RECENCY} "
-        "GROUP BY p.project_name "
-        "ORDER BY (CASE WHEN COUNT(h.id) > 0 THEN 0 ELSE 1 END), MAX(p.pass_date) DESC "
-        "LIMIT 20"
+
+    # 先算每个项目的未售房源数（独立子查询避免笛卡尔积）
+    unsold_map = {}
+    unsold_rows = db.execute(
+        f"SELECT project_name, COUNT(*) as cnt FROM housing_units "
+        f"WHERE house_usage='住宅' AND status='未售' AND {UNSOLD_RECENCY} "
+        f"GROUP BY project_name"
+    ).fetchall()
+    for r in unsold_rows:
+        unsold_map[r["project_name"]] = r["cnt"]
+
+    # 预售证按项目去重，取最新日期
+    permits_rows = db.execute(
+        "SELECT project_name, MAX(developer) as developer, zone, "
+        "MAX(pass_date) as pass_date "
+        "FROM presale_permits GROUP BY project_name "
+        "ORDER BY MAX(pass_date) DESC"
     ).fetchall()
 
-    permits = [{
-        "project_name": r["project_name"] or "",
-        "developer": r["developer"] or "",
-        "zone": r["zone"] or "",
-        "pass_date": r["pass_date"] or "",
-        "unsold": r["unsold"],
-    } for r in rows]
+    # 组装结果：有可售的排前面
+    result = []
+    for r in permits_rows:
+        u = unsold_map.get(r["project_name"], 0)
+        result.append({
+            "project_name": r["project_name"] or "",
+            "developer": r["developer"] or "",
+            "zone": r["zone"] or "",
+            "pass_date": r["pass_date"] or "",
+            "unsold": u,
+        })
+
+    # 有可售的按日期倒序排前面，无可售的按日期倒序排后面
+    unsold_items = sorted(
+        [x for x in result if x["unsold"] > 0], key=lambda x: x["pass_date"], reverse=True
+    )
+    other_items = sorted(
+        [x for x in result if x["unsold"] == 0], key=lambda x: x["pass_date"], reverse=True
+    )
+    permits = (unsold_items + other_items)[:20]
 
     return jsonify({"permits": permits})
 
