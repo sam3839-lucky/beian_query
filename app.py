@@ -45,6 +45,10 @@ def ensure_indexes():
         "CREATE INDEX IF NOT EXISTS idx_units_project_bldg_status "
         "ON housing_units(project_name, building_name, status)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_units_date_signed "
+        "ON housing_units(date_signed)"
+    )
     conn.commit()
     conn.close()
 
@@ -337,13 +341,13 @@ def api_overview():
         "FROM housing_units WHERE house_usage='住宅'"
     ).fetchone()
 
-    # 各区未售住宅统计（取TOP 8）
+    # 各区未售住宅统计（全部区域）
     zone_rows = db.execute(
         "SELECT zone, COUNT(*) as cnt, "
         "ROUND(AVG(total_price)/10000, 1) as avg_t, "
         "ROUND(AVG(unit_price), 0) as avg_u "
         "FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' "
-        "GROUP BY zone ORDER BY cnt DESC LIMIT 8"
+        "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
     zones = [{
         "name": r["zone"], "count": r["cnt"],
@@ -430,6 +434,99 @@ def api_latest_permits():
     } for r in rows]
 
     return jsonify({"permits": permits})
+
+
+# ═══════════════════════════════════════════
+# 成交分析 API
+# ═══════════════════════════════════════════
+
+@app.route("/api/transactions/summary")
+def api_transactions_summary():
+    """本月成交概览：成交量、均价、环比变化"""
+    db = get_db()
+    base = "WHERE status IN ('已网签','已备案','已转移登记') AND total_price > 0"
+    sql = (
+        "SELECT strftime('%Y-%m', date_signed) as month, COUNT(*) as cnt, "
+        "ROUND(AVG(total_price)/10000, 1) as avg_t, "
+        "ROUND(AVG(unit_price), 0) as avg_u "
+        f"FROM housing_units {base} AND date_signed IS NOT NULL "
+        "GROUP BY month ORDER BY month DESC LIMIT 2"
+    )
+    rows = db.execute(sql).fetchall()
+    this_month = rows[0] if len(rows) > 0 else None
+    last_month = rows[1] if len(rows) > 1 else None
+
+    def fmt(r):
+        return {"month": r["month"], "count": r["cnt"], "avg_total": r["avg_t"], "avg_unit": r["avg_u"]} if r else None
+
+    tm = fmt(this_month)
+    lm = fmt(last_month)
+    delta_count = round((tm["count"] - lm["count"]) / lm["count"] * 100, 1) if tm and lm and lm["count"] else 0
+    delta_price = round((tm["avg_total"] - lm["avg_total"]) / lm["avg_total"] * 100, 1) if tm and lm and lm["avg_total"] else 0
+
+    return jsonify({
+        "this_month": tm, "last_month": lm,
+        "delta_count_pct": delta_count, "delta_price_pct": delta_price
+    })
+
+
+@app.route("/api/transactions/trends")
+def api_transactions_trends():
+    """近 N 个月成交量价走势"""
+    months = request.args.get("months", 12, type=int)
+    db = get_db()
+    base = "WHERE status != '未售' AND total_price > 0 AND date_signed IS NOT NULL"
+    rows = db.execute(
+        f"SELECT strftime('%Y-%m', date_signed) as month, COUNT(*) as cnt, "
+        f"ROUND(AVG(total_price)/10000, 1) as avg_total "
+        f"FROM housing_units {base} "
+        f"GROUP BY month ORDER BY month DESC LIMIT ?", [months]
+    ).fetchall()
+    trends = [{"month": r["month"], "count": r["cnt"], "avg_total": r["avg_total"]} for r in rows]
+    trends.reverse()
+    return jsonify({"trends": trends})
+
+
+@app.route("/api/transactions/recent")
+def api_transactions_recent():
+    """近期成交列表（cursor 分页）"""
+    cursor = request.args.get("cursor", "")
+    page_size = request.args.get("page_size", 20, type=int)
+    zone = request.args.get("zone", "")
+    db = get_db()
+
+    conds = ["status != '未售'", "total_price > 0", "date_signed IS NOT NULL"]
+    params = []
+    if cursor:
+        conds.append("date_signed < ?")
+        params.append(cursor)
+    if zone:
+        conds.append("zone = ?")
+        params.append(zone)
+    where = " AND ".join(conds)
+
+    rows = db.execute(
+        f"SELECT project_name, building_name, unit_no, built_area, "
+        f"unit_price, total_price, date_signed, zone "
+        f"FROM housing_units WHERE {where} "
+        f"ORDER BY date_signed DESC LIMIT ?",
+        params + [page_size + 1]
+    ).fetchall()
+
+    has_more = len(rows) > page_size
+    items = [{
+        "project_name": r["project_name"] or "",
+        "building_name": r["building_name"] or "",
+        "unit_no": r["unit_no"],
+        "built_area": r["built_area"],
+        "unit_price": r["unit_price"],
+        "total_price": round(r["total_price"] / 10000, 1),
+        "date_signed": r["date_signed"],
+        "zone": r["zone"] or "",
+    } for r in rows[:page_size]]
+
+    next_cursor = items[-1]["date_signed"] if has_more and items else ""
+    return jsonify({"items": items, "has_more": has_more, "next_cursor": next_cursor})
 
 
 # ═══════════════════════════════════════════
