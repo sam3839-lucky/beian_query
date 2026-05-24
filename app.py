@@ -493,13 +493,49 @@ def api_transactions_summary():
     tm = fmt(this_row)
     lm = fmt(last_row)
     ym = fmt(yoy_row)
-    delta_mom = round((tm["total"] - lm["total"]) / lm["total"] * 100, 1) if tm and lm and lm["total"] else 0
-    delta_yoy = round((tm["total"] - ym["total"]) / ym["total"] * 100, 1) if tm and ym and ym["total"] else 0
+
+    def pct(a, b):
+        return round((a - b) / b * 100, 1) if a and b and b else 0
 
     return jsonify({
         "this_month": tm, "last_month": lm, "yoy_month": ym,
-        "delta_mom_pct": delta_mom, "delta_yoy_pct": delta_yoy,
+        "total_mom_pct": pct(tm["total"], lm["total"]) if tm and lm else 0,
+        "total_yoy_pct": pct(tm["total"], ym["total"]) if tm and ym else 0,
+        "new_mom_pct":   pct(tm["new"], lm["new"]) if tm and lm else 0,
+        "new_yoy_pct":   pct(tm["new"], ym["new"]) if tm and ym else 0,
+        "used_mom_pct":  pct(tm["used"], lm["used"]) if tm and lm else 0,
+        "used_yoy_pct":  pct(tm["used"], ym["used"]) if tm and ym else 0,
     })
+
+
+@app.route("/api/transactions/districts")
+def api_transactions_districts():
+    """本月各区一手/二手成交分布"""
+    db = get_db()
+    # 本月时间范围
+    cur = db.execute("SELECT year, month FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT 1").fetchone()
+    if not cur:
+        return jsonify({"new": [], "used": []})
+    ym = f"{cur['year']}-{cur['month']:02d}"
+
+    def query(ptype_id):
+        rows = db.execute(
+            "SELECT d.name as zone, SUM(t.deal_count) as cnt "
+            "FROM transaction_data t JOIN districts d ON d.id = t.district_id "
+            "WHERE t.property_type_id = ? AND t.building_type='住宅' "
+            "AND t.city_id = 1 "
+            "AND strftime('%Y-%m', t.report_date) = ? "
+            "AND d.name != '全市' "
+            "GROUP BY d.name ORDER BY cnt DESC", [ptype_id, ym]
+        ).fetchall()
+        total = sum(r["cnt"] for r in rows)
+        items = [{
+            "zone": r["zone"], "count": r["cnt"],
+            "pct": round(r["cnt"] / total * 100, 1) if total else 0,
+        } for r in rows[:5]]
+        return {"items": items, "total": total}
+
+    return jsonify({"new": query(1), "used": query(2)})
 
 
 @app.route("/api/transactions/trends")
