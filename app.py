@@ -14,6 +14,10 @@ app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-produc
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "property.db"))
 
+# 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
+UNSOLD_STALE_DAYS = 730  # 2 年
+UNSOLD_RECENCY = f"check_date >= date('now','localtime','-{UNSOLD_STALE_DAYS} days')"
+
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
 WECHAT_SECRET = os.environ.get("WECHAT_SECRET", "")
@@ -96,7 +100,7 @@ def api_zones():
     """区域列表"""
     db = get_db()
     rows = db.execute(
-        "SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage='住宅' AND status='未售' ORDER BY zone"
+        f"SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage='住宅' AND status='未售' AND {UNSOLD_RECENCY} ORDER BY zone"
     ).fetchall()
     zones = [r["zone"] for r in rows]
     zones.sort(key=pinyin_sort_key)
@@ -112,7 +116,7 @@ def api_projects():
         rows = db.execute(
             "SELECT DISTINCT project_name FROM housing_units "
             "WHERE zone=? AND project_name IS NOT NULL AND project_name != '' "
-            "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅') "
+            f"AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY}) "
             "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE date_listed >= '2020-01-01') "
             "ORDER BY project_name",
             [zone],
@@ -121,7 +125,7 @@ def api_projects():
         rows = db.execute(
             "SELECT DISTINCT project_name FROM housing_units "
             "WHERE project_name IS NOT NULL AND project_name != '' "
-            "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅') "
+            f"AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY}) "
             "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE date_listed >= '2020-01-01') "
             "ORDER BY project_name"
         ).fetchall()
@@ -151,7 +155,7 @@ def api_buildings():
     db = get_db()
     rows = db.execute(
         "SELECT DISTINCT building_name FROM housing_units "
-        "WHERE project_name=? AND status='未售' AND house_usage='住宅' "
+        f"WHERE project_name=? AND status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY} "
         "ORDER BY building_name",
         [project],
     ).fetchall()
@@ -173,6 +177,7 @@ def api_units():
 
     db = get_db()
     conditions = ["project_name=?", "house_usage='住宅'", "status='未售'",
+                  UNSOLD_RECENCY,
                   "total_price BETWEEN ? AND ?", "built_area BETWEEN ? AND ?"]
     params = [project, price_min, price_max, area_min, area_max]
 
@@ -331,13 +336,17 @@ def api_overview():
     row = db.execute(
         "SELECT "
         "COUNT(*) as total, "
-        "SUM(CASE WHEN status='未售' THEN 1 ELSE 0 END) as unsold, "
+        f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) as unsold, "
         "SUM(CASE WHEN status='已网签' THEN 1 ELSE 0 END) as signed, "
         "SUM(CASE WHEN status='已备案' THEN 1 ELSE 0 END) as filed, "
         "SUM(CASE WHEN status='已转移登记' THEN 1 ELSE 0 END) as transferred, "
-        "ROUND(AVG(CASE WHEN status='未售' AND total_price>0 THEN total_price END)/10000, 1) as avg_total, "
-        "ROUND(AVG(CASE WHEN status='未售' AND total_price>0 THEN unit_price END), 0) as avg_unit, "
-        "SUM(CASE WHEN house_usage='住宅' AND check_date >= date('now', 'localtime', '-7 days') THEN 1 ELSE 0 END) as recent "
+        f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN total_price END)/10000, 1) as avg_total, "
+        f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN unit_price END), 0) as avg_unit, "
+        "SUM(CASE WHEN house_usage='住宅' AND check_date >= date('now', 'localtime', '-7 days') THEN 1 ELSE 0 END) as recent, "
+        f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) + "
+        "SUM(CASE WHEN status='已网签' THEN 1 ELSE 0 END) + "
+        "SUM(CASE WHEN status='已备案' THEN 1 ELSE 0 END) + "
+        "SUM(CASE WHEN status='已转移登记' THEN 1 ELSE 0 END) as total "
         "FROM housing_units WHERE house_usage='住宅'"
     ).fetchone()
 
@@ -346,7 +355,7 @@ def api_overview():
         "SELECT zone, COUNT(*) as cnt, "
         "ROUND(AVG(total_price)/10000, 1) as avg_t, "
         "ROUND(AVG(unit_price), 0) as avg_u "
-        "FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' "
+        f"FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
     zones = [{
@@ -371,7 +380,7 @@ def api_overview():
 def api_rankings():
     """榜单：低价 / 低单价 / 小面积"""
     db = get_db()
-    base = "WHERE house_usage='住宅' AND status='未售' AND total_price > 0 AND built_area > 0"
+    base = f"WHERE house_usage='住宅' AND status='未售' AND total_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
     # 总价最低 TOP 10
     cheap = db.execute(
@@ -419,7 +428,7 @@ def api_latest_permits():
         "COUNT(h.id) as unsold "
         "FROM presale_permits p "
         "LEFT JOIN housing_units h ON h.project_name = p.project_name "
-        "AND h.house_usage='住宅' AND h.status='未售' "
+        f"AND h.house_usage='住宅' AND h.status='未售' AND h.{UNSOLD_RECENCY} "
         "GROUP BY p.permit_no "
         "ORDER BY p.pass_date DESC LIMIT 30"
     ).fetchall()
@@ -575,7 +584,7 @@ def api_admin_status():
     # 各区可售住宅
     zone_rows = db.execute(
         "SELECT zone, COUNT(*) as cnt FROM housing_units "
-        "WHERE house_usage='住宅' AND status='未售' AND zone != '' "
+        f"WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
 
