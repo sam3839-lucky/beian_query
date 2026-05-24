@@ -540,8 +540,9 @@ def api_transactions_recent():
     where = " AND ".join(conds)
 
     rows = db.execute(
-        f"SELECT report_date, SUM(deal_count) as cnt, "
-        f"SUM(deal_area) as area "
+        f"SELECT report_date, "
+        f"SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_cnt, "
+        f"SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_cnt "
         f"FROM transaction_data WHERE {where} "
         f"GROUP BY report_date ORDER BY report_date DESC LIMIT ?",
         params + [days]
@@ -549,8 +550,9 @@ def api_transactions_recent():
 
     items = [{
         "date": r["report_date"],
-        "count": r["cnt"] or 0,
-        "area": round(r["area"] or 0, 1),
+        "new": r["new_cnt"] or 0,
+        "used": r["used_cnt"] or 0,
+        "total": (r["new_cnt"] or 0) + (r["used_cnt"] or 0),
     } for r in rows]
 
     return jsonify({"items": items})
