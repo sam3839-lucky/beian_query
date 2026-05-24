@@ -414,21 +414,20 @@ def api_rankings():
 
 @app.route("/api/latest-permits")
 def api_latest_permits():
-    """最新预售证（最近30条）"""
+    """最新预售证 — 按项目去重，取最新预售证日期，优先有可售房源（共20条）"""
     db = get_db()
     rows = db.execute(
-        "SELECT p.permit_no, p.project_name, p.developer, p.zone, p.pass_date, "
-        "COUNT(h.id) as unsold "
+        "SELECT p.project_name, MAX(p.developer) as developer, p.zone, "
+        "MAX(p.pass_date) as pass_date, COUNT(h.id) as unsold "
         "FROM presale_permits p "
         "LEFT JOIN housing_units h ON h.project_name = p.project_name "
         f"AND h.house_usage='住宅' AND h.status='未售' AND h.{UNSOLD_RECENCY} "
-        "GROUP BY p.permit_no "
-        "ORDER BY (CASE WHEN COUNT(h.id) > 0 THEN 0 ELSE 1 END), p.pass_date DESC "
-        "LIMIT 30"
+        "GROUP BY p.project_name "
+        "ORDER BY (CASE WHEN COUNT(h.id) > 0 THEN 0 ELSE 1 END), MAX(p.pass_date) DESC "
+        "LIMIT 20"
     ).fetchall()
 
     permits = [{
-        "permit_no": r["permit_no"] or "",
         "project_name": r["project_name"] or "",
         "developer": r["developer"] or "",
         "zone": r["zone"] or "",
