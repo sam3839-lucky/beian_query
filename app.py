@@ -462,15 +462,22 @@ def api_latest_permits():
 
 @app.route("/api/transactions/summary")
 def api_transactions_summary():
-    """本月成交概览：总量、新房、二手房、均价、环比"""
+    """本月成交概览：总量、新房、二手房、环比、同比"""
     db = get_db()
     rows = db.execute(
         "SELECT year, month, total_deal_count, new_deal_count, used_deal_count, "
         "total_deal_area, data_completeness_rate "
-        "FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT 2"
+        "FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT 13"
     ).fetchall()
     this_row = rows[0] if len(rows) > 0 else None
     last_row = rows[1] if len(rows) > 1 else None
+    # 同比：取去年同期（rows 中 month 相同但 year 小 1 的）
+    yoy_row = None
+    if this_row:
+        for r in rows[1:]:
+            if r["month"] == this_row["month"]:
+                yoy_row = r
+                break
 
     def fmt(r):
         if not r: return None
@@ -485,12 +492,13 @@ def api_transactions_summary():
 
     tm = fmt(this_row)
     lm = fmt(last_row)
-    delta_total = round((tm["total"] - lm["total"]) / lm["total"] * 100, 1) if tm and lm and lm["total"] else 0
-    delta_new = round((tm["new"] - lm["new"]) / lm["new"] * 100, 1) if tm and lm and lm["new"] else 0
+    ym = fmt(yoy_row)
+    delta_mom = round((tm["total"] - lm["total"]) / lm["total"] * 100, 1) if tm and lm and lm["total"] else 0
+    delta_yoy = round((tm["total"] - ym["total"]) / ym["total"] * 100, 1) if tm and ym and ym["total"] else 0
 
     return jsonify({
-        "this_month": tm, "last_month": lm,
-        "delta_total_pct": delta_total, "delta_new_pct": delta_new,
+        "this_month": tm, "last_month": lm, "yoy_month": ym,
+        "delta_mom_pct": delta_mom, "delta_yoy_pct": delta_yoy,
     })
 
 
