@@ -423,7 +423,8 @@ def api_latest_permits():
         "LEFT JOIN housing_units h ON h.project_name = p.project_name "
         f"AND h.house_usage='住宅' AND h.status='未售' AND h.{UNSOLD_RECENCY} "
         "GROUP BY p.permit_no "
-        "ORDER BY p.pass_date DESC LIMIT 30"
+        "ORDER BY (CASE WHEN COUNT(h.id) > 0 THEN 0 ELSE 1 END), p.pass_date DESC "
+        "LIMIT 30"
     ).fetchall()
 
     permits = [{
