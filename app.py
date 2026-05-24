@@ -15,7 +15,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-produc
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "property.db"))
 
 # 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
-UNSOLD_STALE_DAYS = 730  # 2 年
+UNSOLD_STALE_DAYS = 2190  # 6 年
 UNSOLD_RECENCY = f"check_date >= date('now','localtime','-{UNSOLD_STALE_DAYS} days')"
 
 # ── 微信小程序配置（部署时改） ──
@@ -378,28 +378,20 @@ def api_overview():
 
 @app.route("/api/rankings")
 def api_rankings():
-    """榜单：低价 / 低单价 / 小面积"""
+    """榜单：总价最低/最高 + 单价最低/最高"""
     db = get_db()
     base = f"WHERE house_usage='住宅' AND status='未售' AND total_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
-    # 总价最低 TOP 10
-    cheap = db.execute(
-        f"SELECT project_name, building_name, unit_no, built_area, unit_price, "
-        f"total_price, zone FROM housing_units {base} "
-        f"ORDER BY total_price ASC LIMIT 10"
-    ).fetchall()
-    # 单价最低 TOP 10
-    cheap_unit = db.execute(
-        f"SELECT project_name, building_name, unit_no, built_area, unit_price, "
-        f"total_price, zone FROM housing_units {base} "
-        f"ORDER BY unit_price ASC LIMIT 10"
-    ).fetchall()
-    # 面积最小 TOP 10
-    small = db.execute(
-        f"SELECT project_name, building_name, unit_no, built_area, unit_price, "
-        f"total_price, zone FROM housing_units {base} "
-        f"ORDER BY built_area ASC LIMIT 10"
-    ).fetchall()
+    def run(order):
+        return db.execute(
+            f"SELECT project_name, building_name, unit_no, built_area, unit_price, "
+            f"total_price, zone FROM housing_units {base} {order} LIMIT 10"
+        ).fetchall()
+
+    cheap_total  = run("ORDER BY total_price ASC")
+    dear_total   = run("ORDER BY total_price DESC")
+    cheap_unit   = run("ORDER BY unit_price ASC")
+    dear_unit    = run("ORDER BY unit_price DESC")
 
     def fmt(row):
         return {
@@ -413,9 +405,10 @@ def api_rankings():
         }
 
     return jsonify({
-        "cheap_total": [fmt(r) for r in cheap],
-        "cheap_unit": [fmt(r) for r in cheap_unit],
-        "small_area": [fmt(r) for r in small],
+        "cheap_total": [fmt(r) for r in cheap_total],
+        "dear_total":  [fmt(r) for r in dear_total],
+        "cheap_unit":  [fmt(r) for r in cheap_unit],
+        "dear_unit":   [fmt(r) for r in dear_unit],
     })
 
 
