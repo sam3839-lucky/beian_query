@@ -102,6 +102,63 @@ def wx_login():
 # API
 # ═══════════════════════════════════════════
 
+@app.route("/api/quick-search")
+def api_quick_search():
+    """瞬搜：输入关键词，返回匹配项目摘要（可售套数、均价、价格区间）"""
+    q = request.args.get("q", "").strip()
+    if not q or len(q) < 1:
+        return jsonify({"results": []})
+
+    db = get_db()
+    # 构建 LIKE 条件：项目名、区域
+    like_q = f"%{q}%"
+
+    sql = (
+        "SELECT h.project_name, h.zone, "
+        "MAX(p.developer) as developer, "
+        "COUNT(*) as unsold_count, "
+        "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
+        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
+        "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
+        "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
+        "FROM housing_units h "
+        "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+        "WHERE h.house_usage='住宅' AND h.status='未售' "
+        f"AND {UNSOLD_RECENCY} "
+        "AND (h.project_name ILIKE %s OR h.zone ILIKE %s) "
+        "GROUP BY h.project_name, h.zone "
+        "ORDER BY unsold_count DESC LIMIT 10"
+    )
+    params = [like_q, like_q]
+    rows = db.execute(sql, params).fetchall()
+
+    results = []
+    for r in rows:
+        # 判断匹配类型
+        name = r["project_name"] or ""
+        q_lower = q.lower()
+        if name == q or name.lower() == q_lower:
+            match_type = "exact"
+        elif q_lower in name.lower():
+            match_type = "contains"
+        else:
+            match_type = "zone"
+
+        results.append({
+            "project_name": name,
+            "zone": r["zone"] or "",
+            "unsold_count": r["unsold_count"],
+            "avg_unit": float(r["avg_unit"] or 0),
+            "avg_total": float(r["avg_total"] or 0),
+            "price_min": float(r["price_min"] or 0),
+            "price_max": float(r["price_max"] or 0),
+            "developer": r["developer"] or "",
+            "match_type": match_type,
+        })
+
+    return jsonify({"results": results})
+
+
 @app.route("/api/zones")
 def api_zones():
     """区域列表"""
