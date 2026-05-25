@@ -104,40 +104,83 @@ def wx_login():
 
 @app.route("/api/quick-search")
 def api_quick_search():
-    """瞬搜：输入关键词，返回匹配项目摘要（可售套数、均价、价格区间）"""
+    """瞬搜：输入关键词，返回匹配项目摘要（可售套数、均价、价格区间）
+    支持：中文关键词、拼音首字母（如 wlpm → 未来平方云山府）"""
     q = request.args.get("q", "").strip()
     if not q or len(q) < 1:
         return jsonify({"results": []})
 
     db = get_db()
-    # 构建 LIKE 条件：项目名、区域
     like_q = f"%{q}%"
+    match_names = None  # 拼音匹配的项目名列表
 
-    sql = (
-        "SELECT h.project_name, h.zone, "
-        "MAX(p.developer) as developer, "
-        "COUNT(*) as unsold_count, "
-        "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
-        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
-        "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
-        "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
-        "FROM housing_units h "
-        "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
-        "WHERE h.house_usage='住宅' AND h.status='未售' "
-        f"AND {UNSOLD_RECENCY} "
-        "AND (h.project_name ILIKE %s OR h.zone ILIKE %s) "
-        "GROUP BY h.project_name, h.zone "
-        "ORDER BY unsold_count DESC LIMIT 10"
-    )
-    params = [like_q, like_q]
+    # 判断是否为拼音首字母输入（纯 ASCII 字母，>=2 位）
+    if q.isascii() and q.isalpha() and len(q) >= 2:
+        q_lower = q.lower()
+        # 取所有住宅项目名，Python 层做拼音首字母匹配
+        all_names = db.execute(
+            f"SELECT DISTINCT project_name FROM housing_units "
+            f"WHERE house_usage='住宅' AND status='未售' AND project_name != '' AND {UNSOLD_RECENCY}"
+        ).fetchall()
+        matched = []
+        for row in all_names:
+            name = row["project_name"]
+            py = "".join([p[0][0] for p in pinyin(name, style=Style.FIRST_LETTER) if p[0]]).lower()
+            if q_lower in py:
+                matched.append(name)
+        if matched:
+            match_names = matched
+
+    # 构建 SQL：优先用拼音匹配的项目名（精准），否则走 ILIKE
+    if match_names:
+        placeholders = ", ".join(["%s"] * len(match_names))
+        sql = (
+            "SELECT h.project_name, h.zone, "
+            "MAX(p.developer) as developer, "
+            "COUNT(*) as unsold_count, "
+            "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
+            "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
+            "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
+            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
+            "FROM housing_units h "
+            "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+            "WHERE h.house_usage='住宅' AND h.status='未售' "
+            f"AND {UNSOLD_RECENCY} "
+            f"AND h.project_name IN ({placeholders}) "
+            "GROUP BY h.project_name, h.zone "
+            "ORDER BY unsold_count DESC LIMIT 10"
+        )
+        params = match_names
+        is_pinyin = True
+    else:
+        sql = (
+            "SELECT h.project_name, h.zone, "
+            "MAX(p.developer) as developer, "
+            "COUNT(*) as unsold_count, "
+            "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
+            "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
+            "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
+            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
+            "FROM housing_units h "
+            "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+            "WHERE h.house_usage='住宅' AND h.status='未售' "
+            f"AND {UNSOLD_RECENCY} "
+            "AND (h.project_name ILIKE %s OR h.zone ILIKE %s) "
+            "GROUP BY h.project_name, h.zone "
+            "ORDER BY unsold_count DESC LIMIT 10"
+        )
+        params = [like_q, like_q]
+        is_pinyin = False
+
     rows = db.execute(sql, params).fetchall()
 
     results = []
     for r in rows:
-        # 判断匹配类型
         name = r["project_name"] or ""
         q_lower = q.lower()
-        if name == q or name.lower() == q_lower:
+        if is_pinyin:
+            match_type = "pinyin"
+        elif name == q or name.lower() == q_lower:
             match_type = "exact"
         elif q_lower in name.lower():
             match_type = "contains"
