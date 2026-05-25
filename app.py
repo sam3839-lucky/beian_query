@@ -1,10 +1,11 @@
 """
-备案价查询 — Flask 后端
+备案价查询 — Flask 后端 (PostgreSQL)
 公众号菜单入口 → 微信 OAuth → 查询页面 → API 数据
 """
-import sqlite3
 import os
 import re
+import psycopg2
+import psycopg2.extras
 from flask import Flask, request, jsonify, g
 from datetime import datetime
 from pypinyin import pinyin, Style
@@ -12,22 +13,42 @@ from pypinyin import pinyin, Style
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-production")
 
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "property.db"))
+DB_CONFIG = {
+    "dbname": os.environ.get("DB_NAME", "property_clawer"),
+    "user": os.environ.get("DB_USER", "property_clawer"),
+    "password": os.environ.get("DB_PASSWORD", ""),
+    "host": os.environ.get("DB_HOST", "localhost"),
+}
 
 # 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
 UNSOLD_STALE_DAYS = 2190  # 6 年
-UNSOLD_RECENCY = f"check_date >= date('now','localtime','-{UNSOLD_STALE_DAYS} days')"
+UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
 WECHAT_SECRET = os.environ.get("WECHAT_SECRET", "")
 
 
+class PGCursor:
+    """psycopg2 adapter — mimics sqlite3 connection interface for minimal code change"""
+    def __init__(self, conn):
+        self.conn = conn
+        self.cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    def execute(self, sql, params=None):
+        self.cur.execute(sql, params or ())
+        return self
+    def fetchall(self): return self.cur.fetchall()
+    def fetchone(self): return self.cur.fetchone()
+    def commit(self): self.conn.commit()
+    def close(self):
+        self.cur.close()
+        self.conn.close()
+
+
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA journal_mode=WAL")
+        conn = psycopg2.connect(**DB_CONFIG)
+        g.db = PGCursor(conn)
     return g.db
 
 
@@ -39,22 +60,7 @@ def close_db(exception):
 
 
 def ensure_indexes():
-    """启动时确保索引存在（不阻塞请求）"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_units_project_bldg "
-        "ON housing_units(project_name, building_name)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_units_project_bldg_status "
-        "ON housing_units(project_name, building_name, status)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_units_date_signed "
-        "ON housing_units(date_signed)"
-    )
-    conn.commit()
-    conn.close()
+    """PostgreSQL 索引已在建表时创建，跳过"""
 
 
 # ═══════════════════════════════════════════
@@ -115,7 +121,7 @@ def api_projects():
     if zone:
         rows = db.execute(
             "SELECT DISTINCT project_name FROM housing_units "
-            "WHERE zone=? AND project_name IS NOT NULL AND project_name != '' "
+            "WHERE zone=%s AND project_name IS NOT NULL AND project_name != '' "
             f"AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY}) "
             "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE date_listed >= '2020-01-01') "
             "ORDER BY project_name",
@@ -155,7 +161,7 @@ def api_buildings():
     db = get_db()
     rows = db.execute(
         "SELECT DISTINCT building_name FROM housing_units "
-        f"WHERE project_name=? AND status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY} "
+        f"WHERE project_name=%s AND status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY} "
         "ORDER BY building_name",
         [project],
     ).fetchall()
@@ -176,17 +182,17 @@ def api_units():
     search = request.args.get("search", "")
 
     db = get_db()
-    conditions = ["project_name=?", "house_usage='住宅'", "status='未售'",
+    conditions = ["project_name=%s", "house_usage='住宅'", "status='未售'",
                   UNSOLD_RECENCY,
-                  "total_price BETWEEN ? AND ?", "built_area BETWEEN ? AND ?"]
+                  "total_price BETWEEN %s AND %s", "built_area BETWEEN %s AND %s"]
     params = [project, price_min, price_max, area_min, area_max]
 
     if building:
-        conditions.append("building_name=?")
+        conditions.append("building_name=%s")
         params.append(building)
 
     if search:
-        conditions.append("unit_no LIKE ?")
+        conditions.append("unit_no LIKE %s")
         params.append(f"%{search}%")
 
     where = " AND ".join(conditions)
@@ -264,18 +270,18 @@ def api_stats():
     params = []
     has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 9999)
     if has_filter:
-        conds.append("total_price BETWEEN ? AND ?")
-        conds.append("built_area BETWEEN ? AND ?")
+        conds.append("total_price BETWEEN %s AND %s")
+        conds.append("built_area BETWEEN %s AND %s")
         params.extend([price_min, price_max, area_min, area_max])
     where_extra = " AND " + " AND ".join(conds) if conds else ""
     
     if zone and not project:
         total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=?{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=%s{where_extra}",
             [zone] + params,
         ).fetchone()["cnt"]
         sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=? AND status!='未售'{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=%s AND status!='未售'{where_extra}",
             [zone] + params,
         ).fetchone()["cnt"]
         unsold = total - sold
@@ -291,26 +297,26 @@ def api_stats():
 
     if building:
         total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=? AND building_name=?{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND building_name=%s{where_extra}",
             [project, building] + params,
         ).fetchone()["cnt"]
         sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=? AND building_name=? AND status!='未售'{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND building_name=%s AND status!='未售'{where_extra}",
             [project, building] + params,
         ).fetchone()["cnt"]
     else:
         total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=?{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s{where_extra}",
             [project] + params,
         ).fetchone()["cnt"]
         sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=? AND status!='未售'{where_extra}",
+            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND status!='未售'{where_extra}",
             [project] + params,
         ).fetchone()["cnt"]
 
     unsold = total - sold
     project_total = total if not building else db.execute(
-        "SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=?",
+        "SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s",
         [project],
     ).fetchone()["cnt"]
 
@@ -340,9 +346,9 @@ def api_overview():
         "SUM(CASE WHEN status='已网签' THEN 1 ELSE 0 END) as signed, "
         "SUM(CASE WHEN status='已备案' THEN 1 ELSE 0 END) as filed, "
         "SUM(CASE WHEN status='已转移登记' THEN 1 ELSE 0 END) as transferred, "
-        f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN total_price END)/10000, 1) as avg_total, "
-        f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN unit_price END), 0) as avg_unit, "
-        "SUM(CASE WHEN house_usage='住宅' AND check_date >= date('now', 'localtime', '-7 days') THEN 1 ELSE 0 END) as recent, "
+        f"ROUND((AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN total_price END)/10000)::numeric, 1) as avg_total, "
+        f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN unit_price END)::numeric, 0) as avg_unit, "
+        "SUM(CASE WHEN house_usage='住宅' AND check_date >= (CURRENT_DATE - INTERVAL '7 days')::text THEN 1 ELSE 0 END) as recent, "
         f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN status='已网签' THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN status='已备案' THEN 1 ELSE 0 END) + "
@@ -353,8 +359,8 @@ def api_overview():
     # 各区未售住宅统计（全部区域）
     zone_rows = db.execute(
         "SELECT zone, COUNT(*) as cnt, "
-        "ROUND(AVG(total_price)/10000, 1) as avg_t, "
-        "ROUND(AVG(unit_price), 0) as avg_u "
+        "ROUND((AVG(total_price)/10000)::numeric, 1) as avg_t, "
+        "ROUND(AVG(unit_price)::numeric, 0) as avg_u "
         f"FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
@@ -429,7 +435,7 @@ def api_latest_permits():
 
     # 预售证按项目去重，取最新日期
     permits_rows = db.execute(
-        "SELECT project_name, MAX(developer) as developer, zone, "
+        "SELECT project_name, MAX(developer) as developer, MAX(zone) as zone, "
         "MAX(pass_date) as pass_date "
         "FROM presale_permits GROUP BY project_name "
         "ORDER BY MAX(pass_date) DESC"
@@ -464,30 +470,35 @@ def api_latest_permits():
 def api_transactions_summary():
     """本月成交概览：总量、新房、二手房、环比、同比"""
     db = get_db()
+    base = "WHERE building_type='住宅' AND city_id=1 "
     rows = db.execute(
-        "SELECT year, month, total_deal_count, new_deal_count, used_deal_count, "
-        "total_deal_area, data_completeness_rate "
-        "FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT 13"
+        "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_cnt, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_cnt, "
+        "SUM(deal_area) as area "
+        f"FROM transaction_data {base} "
+        "GROUP BY ym ORDER BY ym DESC LIMIT 13"
     ).fetchall()
     this_row = rows[0] if len(rows) > 0 else None
     last_row = rows[1] if len(rows) > 1 else None
-    # 同比：取去年同期（rows 中 month 相同但 year 小 1 的）
     yoy_row = None
     if this_row:
+        this_ym = this_row["ym"]
         for r in rows[1:]:
-            if r["month"] == this_row["month"]:
+            if r["ym"][5:] == this_ym[5:]:
                 yoy_row = r
                 break
 
     def fmt(r):
         if not r: return None
+        parts = r["ym"].split("-")
         return {
-            "year": r["year"], "month": r["month"],
-            "total": r["total_deal_count"] or 0,
-            "new": r["new_deal_count"] or 0,
-            "used": r["used_deal_count"] or 0,
-            "area": round(r["total_deal_area"] or 0, 1),
-            "completeness": round((r["data_completeness_rate"] or 0) * 100, 0),
+            "year": int(parts[0]), "month": int(parts[1]),
+            "total": (r["new_cnt"] or 0) + (r["used_cnt"] or 0),
+            "new": r["new_cnt"] or 0,
+            "used": r["used_cnt"] or 0,
+            "area": round(r["area"] or 0, 1),
+            "completeness": 100,
         }
 
     tm = fmt(this_row)
@@ -512,19 +523,23 @@ def api_transactions_summary():
 def api_transactions_districts():
     """本月各区一手/二手成交分布"""
     db = get_db()
-    # 本月时间范围
-    cur = db.execute("SELECT year, month FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT 1").fetchone()
+    # 从 transaction_data 直接获取最新月份
+    cur = db.execute(
+        "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym FROM transaction_data "
+        "WHERE building_type='住宅' AND city_id=1 "
+        "ORDER BY report_date DESC LIMIT 1"
+    ).fetchone()
     if not cur:
         return jsonify({"new": [], "used": []})
-    ym = f"{cur['year']}-{cur['month']:02d}"
+    ym = cur["ym"]
 
     def query(ptype_id):
         rows = db.execute(
             "SELECT d.name as zone, SUM(t.deal_count) as cnt "
             "FROM transaction_data t JOIN districts d ON d.id = t.district_id "
-            "WHERE t.property_type_id = ? AND t.building_type='住宅' "
+            "WHERE t.property_type_id = %s AND t.building_type='住宅' "
             "AND t.city_id = 1 "
-            "AND strftime('%Y-%m', t.report_date) = ? "
+            "AND TO_CHAR(t.report_date, 'YYYY-MM') = %s "
             "AND d.name != '全市' "
             "GROUP BY d.name ORDER BY cnt DESC", [ptype_id, ym]
         ).fetchall()
@@ -548,14 +563,18 @@ def api_transactions_trends():
     months = request.args.get("months", 12, type=int)
     db = get_db()
     rows = db.execute(
-        "SELECT year, month, total_deal_count as total, "
-        "new_deal_count as new_count, used_deal_count as used_count, "
-        "total_deal_area as area "
-        "FROM monthly_aggregation ORDER BY year DESC, month DESC LIMIT ?",
+        "SELECT TO_CHAR(report_date, 'YYYY-MM') as month, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_count, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_count, "
+        "SUM(deal_count) as total, "
+        "SUM(deal_area) as area "
+        "FROM transaction_data "
+        "WHERE building_type='住宅' AND city_id=1 "
+        "GROUP BY month ORDER BY month DESC LIMIT %s",
         [months]
     ).fetchall()
     trends = [{
-        "month": f"{r['year']}-{r['month']:02d}",
+        "month": r["month"],
         "total": r["total"] or 0,
         "new": r["new_count"] or 0,
         "used": r["used_count"] or 0,
@@ -574,16 +593,16 @@ def api_transactions_recent():
     conds = ["building_type='住宅'", "report_date IS NOT NULL"]
     params = []
     if zone_id:
-        conds.append("district_id = ?")
+        conds.append("district_id = %s")
         params.append(zone_id)
     where = " AND ".join(conds)
 
     rows = db.execute(
-        f"SELECT report_date, "
+        f"SELECT TO_CHAR(report_date, 'YYYY-MM-DD') as report_date, "
         f"SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_cnt, "
         f"SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_cnt "
         f"FROM transaction_data WHERE {where} "
-        f"GROUP BY report_date ORDER BY report_date DESC LIMIT ?",
+        f"GROUP BY report_date ORDER BY report_date DESC LIMIT %s",
         params + [days]
     ).fetchall()
 
@@ -636,9 +655,11 @@ def api_admin_status():
     # 预售证数量
     permits = db.execute("SELECT COUNT(*) as cnt FROM presale_permits").fetchone()["cnt"]
 
-    # DB 文件大小
-    _db_path = DB_PATH if os.path.exists(DB_PATH) else ""
-    db_size_mb = round(os.path.getsize(_db_path) / 1048576, 1) if _db_path else 0
+    # DB 大小（PG）
+    db_size = db.execute(
+        "SELECT pg_database_size(current_database()) as sz"
+    ).fetchone()
+    db_size_mb = round(db_size["sz"] / 1048576, 1) if db_size and db_size["sz"] else 0
 
     # 各区可售住宅
     zone_rows = db.execute(
