@@ -366,7 +366,7 @@ def api_overview():
     ).fetchall()
     zones = [{
         "name": r["zone"], "count": r["cnt"],
-        "avg_total": r["avg_t"], "avg_unit": r["avg_u"]
+        "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0)
     } for r in zone_rows]
 
     return jsonify({
@@ -375,8 +375,8 @@ def api_overview():
         "signed": row["signed"],
         "filed": row["filed"],
         "transferred": row["transferred"],
-        "avg_total": row["avg_total"] or 0,
-        "avg_unit": row["avg_unit"] or 0,
+        "avg_total": float(row["avg_total"] or 0),
+        "avg_unit": float(row["avg_unit"] or 0),
         "recent": row["recent"],
         "zones": zones,
     })
@@ -492,13 +492,22 @@ def api_transactions_summary():
     def fmt(r):
         if not r: return None
         parts = r["ym"].split("-")
+        year, month = int(parts[0]), int(parts[1])
+        # 当月：按已过天数估算完整度；过往月份：100%
+        now = datetime.now()
+        if year == now.year and month == now.month:
+            import calendar
+            dom = calendar.monthrange(year, month)[1]
+            completeness = min(100, round(now.day / dom * 100))
+        else:
+            completeness = 100
         return {
-            "year": int(parts[0]), "month": int(parts[1]),
+            "year": year, "month": month,
             "total": (r["new_cnt"] or 0) + (r["used_cnt"] or 0),
             "new": r["new_cnt"] or 0,
             "used": r["used_cnt"] or 0,
             "area": round(r["area"] or 0, 1),
-            "completeness": 100,
+            "completeness": completeness,
         }
 
     tm = fmt(this_row)
