@@ -2,6 +2,7 @@
 备案价查询 — Flask 后端 (PostgreSQL)
 公众号菜单入口 → 微信 OAuth → 查询页面 → API 数据
 """
+import calendar
 import os
 import re
 import psycopg2
@@ -496,7 +497,6 @@ def api_transactions_summary():
         # 当月：按已过天数估算完整度；过往月份：100%
         now = datetime.now()
         if year == now.year and month == now.month:
-            import calendar
             dom = calendar.monthrange(year, month)[1]
             completeness = min(100, round(now.day / dom * 100))
         else:
@@ -633,7 +633,6 @@ def api_transactions_recent():
 def api_admin_status():
     """运营面板：同步状态、数据统计、系统健康"""
     db = get_db()
-    import os, time as _time
 
     # 总量
     total = db.execute("SELECT COUNT(*) as cnt FROM housing_units").fetchone()["cnt"]
