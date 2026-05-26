@@ -248,8 +248,8 @@ def api_subscribe():
             [openid]
         ).fetchone()["cnt"]
         return jsonify({"subscribed": True, "count": count, "max": 5})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "subscribe failed"}), 500
 
 
 @app.route("/api/unsubscribe", methods=["POST"])
@@ -508,7 +508,7 @@ def api_generate_poster():
             pass_date=row["pass_date"] or "",
         )
     except Exception as e:
-        return jsonify({"error": f"poster generation failed: {str(e)}"}), 500
+        return jsonify({"error": "poster generation failed"}), 500
 
     return send_file(
         io.BytesIO(png_bytes),
