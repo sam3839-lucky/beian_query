@@ -886,7 +886,7 @@ def api_latest_permits():
 def api_transactions_summary():
     """本月成交概览：总量、新房、二手房、环比、同比"""
     db = get_db()
-    base = "WHERE city_id=1 AND district_id NOT IN (200, 5999) "
+    base = "WHERE city_id=1 AND district_id != 5999 "
     rows = db.execute(
         "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym, "
         "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_cnt, "
@@ -993,7 +993,7 @@ def api_transactions_trends():
         "SUM(deal_count) as total, "
         "SUM(deal_area) as area "
         f"FROM transaction_data "
-        f"WHERE city_id=1 AND district_id NOT IN (200, 5999) "
+        f"WHERE city_id=1 AND district_id != 5999 "
         "GROUP BY month ORDER BY month DESC LIMIT %s",
         [months]
     ).fetchall()
@@ -1014,7 +1014,7 @@ def api_transactions_recent():
     zone_id = request.args.get("zone_id", type=int)
     db = get_db()
 
-    conds = ["report_date IS NOT NULL", "city_id = 1", "district_id NOT IN (200, 5999)"]
+    conds = ["report_date IS NOT NULL", "city_id = 1", "district_id != 5999"]
     params = []
     if zone_id:
         conds.append("district_id = %s")
