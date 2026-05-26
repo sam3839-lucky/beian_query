@@ -805,7 +805,7 @@ def api_overview():
     zones = [{
         "name": r["zone"], "count": r["cnt"],
         "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0),
-        "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01), 1),
+        "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01) / 30, 1),
     } for r in zone_rows]
 
     return jsonify({
