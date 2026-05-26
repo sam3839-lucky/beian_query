@@ -886,7 +886,7 @@ def api_latest_permits():
 def api_transactions_summary():
     """本月成交概览：总量、新房、二手房、环比、同比"""
     db = get_db()
-    base = "WHERE building_type='住宅' AND city_id=1 "
+    base = "WHERE city_id=1 AND district_id NOT IN (200, 5999) "
     rows = db.execute(
         "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym, "
         "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_cnt, "
@@ -950,7 +950,7 @@ def api_transactions_districts():
     # 从 transaction_data 直接获取最新月份
     cur = db.execute(
         "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym FROM transaction_data "
-        "WHERE building_type='住宅' AND city_id=1 "
+        "WHERE city_id=1 "
         "ORDER BY report_date DESC LIMIT 1"
     ).fetchone()
     if not cur:
@@ -961,7 +961,7 @@ def api_transactions_districts():
         rows = db.execute(
             "SELECT d.name as zone, SUM(t.deal_count) as cnt "
             "FROM transaction_data t JOIN districts d ON d.id = t.district_id "
-            "WHERE t.property_type_id = %s AND t.building_type='住宅' "
+            "WHERE t.property_type_id = %s "
             "AND t.city_id = 1 "
             "AND TO_CHAR(t.report_date, 'YYYY-MM') = %s "
             "AND d.name != '全市' "
@@ -992,8 +992,8 @@ def api_transactions_trends():
         "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_count, "
         "SUM(deal_count) as total, "
         "SUM(deal_area) as area "
-        "FROM transaction_data "
-        "WHERE building_type='住宅' AND city_id=1 "
+        f"FROM transaction_data "
+        f"WHERE city_id=1 AND district_id NOT IN (200, 5999) "
         "GROUP BY month ORDER BY month DESC LIMIT %s",
         [months]
     ).fetchall()
@@ -1014,7 +1014,7 @@ def api_transactions_recent():
     zone_id = request.args.get("zone_id", type=int)
     db = get_db()
 
-    conds = ["building_type='住宅'", "report_date IS NOT NULL"]
+    conds = ["report_date IS NOT NULL", "city_id = 1", "district_id NOT IN (200, 5999)"]
     params = []
     if zone_id:
         conds.append("district_id = %s")
