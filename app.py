@@ -780,9 +780,32 @@ def api_overview():
         f"FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
+
+    # 近90天各区一手住宅日均成交量
+    sales_rows = db.execute(
+        "SELECT d.name as zone, "
+        "SUM(CASE WHEN t.property_type_id = 1 THEN t.deal_count ELSE 0 END) / 90.0 as daily_avg "
+        "FROM transaction_data t "
+        "JOIN districts d ON d.id = t.district_id "
+        "WHERE t.report_date >= CURRENT_DATE - INTERVAL '90 days' "
+        "AND t.city_id = 1 AND t.building_type = '住宅' AND t.district_id != 5999 "
+        "GROUP BY d.name"
+    ).fetchall()
+    # 映射 housing_units.zone → districts.name（名称不一致）
+    zone_alias = {"深汕合作": "深汕"}
+    sales_map = {}
+    for r in sales_rows:
+        z = r["zone"]
+        sales_map[z] = max(r["daily_avg"] or 0, 0.01)
+        # 别名也指向同一数据
+        for k, v in zone_alias.items():
+            if v == z:
+                sales_map[k] = max(r["daily_avg"] or 0, 0.01)
+
     zones = [{
         "name": r["zone"], "count": r["cnt"],
-        "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0)
+        "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0),
+        "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01), 1),
     } for r in zone_rows]
 
     return jsonify({
