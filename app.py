@@ -221,6 +221,92 @@ def api_resolve_scene():
         return jsonify({"error": "invalid code"}), 400
 
 
+# ═══════════════════════════════════════════
+# 关注订阅 API
+# ═══════════════════════════════════════════
+
+@app.route("/api/subscribe", methods=["POST"])
+def api_subscribe():
+    """关注项目"""
+    data = request.get_json() or {}
+    openid = data.get("openid", "").strip()
+    project = data.get("project", "").strip()
+    if not openid or not project:
+        return jsonify({"error": "missing openid or project"}), 400
+
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO subscriptions (openid, project_name) VALUES (%s, %s) "
+            "ON CONFLICT (openid, project_name) DO NOTHING",
+            [openid, project]
+        )
+        db.commit()
+        # 返回当前关注数
+        count = db.execute(
+            "SELECT COUNT(*) as cnt FROM subscriptions WHERE openid = %s",
+            [openid]
+        ).fetchone()["cnt"]
+        return jsonify({"subscribed": True, "count": count, "max": 5})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unsubscribe", methods=["POST"])
+def api_unsubscribe():
+    """取消关注"""
+    data = request.get_json() or {}
+    openid = data.get("openid", "").strip()
+    project = data.get("project", "").strip()
+    if not openid or not project:
+        return jsonify({"error": "missing openid or project"}), 400
+
+    db = get_db()
+    db.execute(
+        "DELETE FROM subscriptions WHERE openid = %s AND project_name = %s",
+        [openid, project]
+    )
+    db.commit()
+    count = db.execute(
+        "SELECT COUNT(*) as cnt FROM subscriptions WHERE openid = %s",
+        [openid]
+    ).fetchone()["cnt"]
+    return jsonify({"subscribed": False, "count": count})
+
+
+@app.route("/api/my-subscriptions")
+def api_my_subscriptions():
+    """获取我的关注列表（含项目摘要）"""
+    openid = request.args.get("openid", "").strip()
+    if not openid:
+        return jsonify({"subscriptions": []})
+
+    db = get_db()
+    rows = db.execute(
+        "SELECT s.project_name, s.subscribed_at, "
+        "COUNT(h.id) as unsold_count, "
+        "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
+        "MAX(h.zone) as zone "
+        "FROM subscriptions s "
+        "LEFT JOIN housing_units h ON h.project_name = s.project_name "
+        f"AND h.house_usage='住宅' AND h.status='未售' AND {UNSOLD_RECENCY} "
+        "WHERE s.openid = %s "
+        "GROUP BY s.project_name, s.subscribed_at "
+        "ORDER BY s.subscribed_at DESC",
+        [openid]
+    ).fetchall()
+
+    subs = [{
+        "project_name": r["project_name"],
+        "zone": r["zone"] or "",
+        "unsold_count": r["unsold_count"],
+        "avg_total": float(r["avg_total"] or 0),
+        "subscribed_at": str(r["subscribed_at"]) if r["subscribed_at"] else "",
+    } for r in rows]
+
+    return jsonify({"subscriptions": subs})
+
+
 @app.route("/api/generate-poster")
 def api_generate_poster():
     """生成项目分享海报，返回 PNG 图片"""
