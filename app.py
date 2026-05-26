@@ -3,13 +3,15 @@
 公众号菜单入口 → 微信 OAuth → 查询页面 → API 数据
 """
 import calendar
+import io
 import os
 import re
 import psycopg2
 import psycopg2.extras
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, send_file
 from datetime import datetime
 from pypinyin import pinyin, Style
+import poster
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-production")
@@ -200,6 +202,76 @@ def api_quick_search():
         })
 
     return jsonify({"results": results})
+
+
+@app.route("/api/resolve-scene")
+def api_resolve_scene():
+    """解码小程序码 scene 参数（base64url → 项目名）"""
+    code = request.args.get("code", "").strip()
+    if not code:
+        return jsonify({"error": "missing code"}), 400
+    try:
+        import base64 as _b64
+        # base64url → 标准 base64
+        b64 = code.replace("-", "+").replace("_", "/")
+        b64 += "=" * (4 - len(b64) % 4) if len(b64) % 4 else ""
+        name = _b64.urlsafe_b64decode(b64.encode()).decode("utf-8")
+        return jsonify({"project_name": name})
+    except Exception:
+        return jsonify({"error": "invalid code"}), 400
+
+
+@app.route("/api/generate-poster")
+def api_generate_poster():
+    """生成项目分享海报，返回 PNG 图片"""
+    project = request.args.get("project", "").strip()
+    if not project:
+        return jsonify({"error": "missing project"}), 400
+
+    db = get_db()
+    # 查询项目摘要数据
+    row = db.execute(
+        "SELECT h.project_name, h.zone, "
+        "COUNT(*) as unsold, "
+        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
+        "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
+        "ROUND((MIN(h.total_price)/10000)::numeric, 0) as price_min, "
+        "ROUND((MAX(h.total_price)/10000)::numeric, 0) as price_max, "
+        "MAX(p.developer) as developer, "
+        "MAX(p.pass_date) as pass_date "
+        "FROM housing_units h "
+        "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+        "WHERE h.project_name = %s AND h.house_usage='住宅' AND h.status='未售' "
+        f"AND {UNSOLD_RECENCY} "
+        "GROUP BY h.project_name, h.zone",
+        [project]
+    ).fetchone()
+
+    if not row:
+        return jsonify({"error": "project not found"}), 404
+
+    avg_unit_w = round(float(row["avg_unit"] or 0) / 10000, 1)
+
+    try:
+        png_bytes, _ = poster.get_or_generate(
+            project_name=row["project_name"],
+            zone=row["zone"] or "",
+            unsold=row["unsold"],
+            avg_unit=avg_unit_w,
+            avg_total=row["avg_total"] or 0,
+            price_min=int(row["price_min"] or 0),
+            price_max=int(row["price_max"] or 0),
+            developer=row["developer"] or "",
+            pass_date=row["pass_date"] or "",
+        )
+    except Exception as e:
+        return jsonify({"error": f"poster generation failed: {str(e)}"}), 500
+
+    return send_file(
+        io.BytesIO(png_bytes),
+        mimetype="image/png",
+        as_attachment=False,
+    )
 
 
 @app.route("/api/zones")

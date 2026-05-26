@@ -1,11 +1,77 @@
 """生成项目分享海报 (750×1334 PNG)"""
+import base64
 import io
 import os
+import hashlib
+import time
+import requests
 from PIL import Image, ImageDraw, ImageFont
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 POSTER_DIR = os.path.join(STATIC_DIR, "posters")
-QR_PATH = os.path.join(STATIC_DIR, "qrcode.png")
+FALLBACK_QR = os.path.join(STATIC_DIR, "qrcode.png")  # 通用小程序码
+
+# 微信小程序配置
+WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
+WECHAT_SECRET = os.environ.get("WECHAT_SECRET", "")
+_token_cache = {"token": None, "expires_at": 0}
+
+
+def _get_wx_token():
+    """获取/刷新微信 access_token"""
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires_at"] - 300:
+        return _token_cache["token"]
+    if not WECHAT_APPID or not WECHAT_SECRET:
+        return None
+    resp = requests.get(
+        "https://api.weixin.qq.com/cgi-bin/token",
+        params={"grant_type": "client_credential", "appid": WECHAT_APPID, "secret": WECHAT_SECRET},
+        timeout=10
+    )
+    data = resp.json()
+    if "access_token" in data:
+        _token_cache["token"] = data["access_token"]
+        _token_cache["expires_at"] = now + data.get("expires_in", 7200)
+        return _token_cache["token"]
+    return None
+
+
+def _get_project_qr(project_name):
+    """获取项目专用小程序码（扫码直达该项目房源）"""
+    # 用项目名的 md5 做文件名，避免特殊字符
+    key = hashlib.md5(project_name.encode()).hexdigest()[:12]
+    qr_path = os.path.join(POSTER_DIR, f"qr_{key}.png")
+
+    # 24h 缓存
+    if os.path.exists(qr_path) and (time.time() - os.path.getmtime(qr_path) < 86400):
+        return qr_path
+
+    token = _get_wx_token()
+    if not token:
+        return FALLBACK_QR if os.path.exists(FALLBACK_QR) else None
+
+    # scene 参数：base64url 编码项目名（扫码后在 app.js 解码）
+    scene = base64.urlsafe_b64encode(project_name.encode()).decode().rstrip("=")[:32]
+    body = {
+        "scene": scene,
+        "page": "pages/index/index",
+        "width": 430,
+        "auto_color": False,
+        "line_color": {"r": 7, "g": 193, "b": 96},
+        "is_hyaline": False,
+    }
+    resp = requests.post(
+        f"https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token={token}",
+        json=body, timeout=15
+    )
+    if resp.headers.get("Content-Type", "").startswith("image"):
+        os.makedirs(POSTER_DIR, exist_ok=True)
+        with open(qr_path, "wb") as f:
+            f.write(resp.content)
+        return qr_path
+
+    return FALLBACK_QR if os.path.exists(FALLBACK_QR) else None
 
 # 中文字体：优先系统字体（.ttc 可渲染），其次自定义字体
 _SYSTEM_FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
@@ -115,15 +181,20 @@ def generate(project_name, zone, unsold, avg_unit, avg_total, price_min, price_m
         radius=16, fill=LIGHT_BG
     )
 
+    qr_path = _get_project_qr(project_name)
     try:
-        qr_img = Image.open(QR_PATH).convert("RGBA")
+        if qr_path and os.path.exists(qr_path):
+            qr_img = Image.open(qr_path).convert("RGBA")
+        elif os.path.exists(FALLBACK_QR):
+            qr_img = Image.open(FALLBACK_QR).convert("RGBA")
+        else:
+            raise FileNotFoundError
         qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
         if qr_img.mode == "RGBA":
             img.paste(qr_img, (qr_x, qr_y), qr_img)
         else:
             img.paste(qr_img, (qr_x, qr_y))
-    except (OSError, IOError):
-        # 无二维码图片时显示占位符
+    except (OSError, IOError, FileNotFoundError):
         draw.rectangle([(qr_x, qr_y), (qr_x + qr_size, qr_y + qr_size)], outline=BORDER, width=2)
         placeholder = "小程序码"
         pw = draw.textlength(placeholder, font=_font(28))
