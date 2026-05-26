@@ -307,6 +307,163 @@ def api_my_subscriptions():
     return jsonify({"subscriptions": subs})
 
 
+# ═══════════════════════════════════════════
+# 会员体系 API
+# ═══════════════════════════════════════════
+
+TIER_LIMITS = {
+    "free": {"searches": 20, "posters": 3, "follows": 3, "trends_months": 3},
+    "pro":  {"searches": 9999, "posters": 9999, "follows": 10, "trends_months": 12},
+    "team": {"searches": 9999, "posters": 9999, "follows": 30, "trends_months": 999},
+}
+
+
+def _ensure_user(openid):
+    """确保 users 表存在该用户记录，返回当前记录"""
+    db = get_db()
+    db.execute(
+        "INSERT INTO users (openid) VALUES (%s) ON CONFLICT (openid) DO NOTHING",
+        [openid]
+    )
+    db.commit()
+
+
+def _reset_daily_counters(openid):
+    """跨天自动重置每日计数器"""
+    db = get_db()
+    today = datetime.now().date()
+    row = db.execute(
+        "SELECT search_date, poster_date FROM users WHERE openid = %s", [openid]
+    ).fetchone()
+    if not row:
+        return
+    updates = []
+    params = []
+    if row["search_date"] and row["search_date"] < today:
+        updates.append("searches_today = 0, search_date = %s")
+        params.append(today)
+    if row["poster_date"] and row["poster_date"] < today:
+        updates.append("posters_today = 0, poster_date = %s")
+        params.append(today)
+    if updates:
+        db.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE openid = %s",
+            params + [openid]
+        )
+        db.commit()
+
+
+@app.route("/api/user-tier")
+def api_user_tier():
+    """获取用户等级和当日用量"""
+    openid = request.args.get("openid", "").strip()
+    if not openid:
+        return jsonify({"tier": "free", "limits": TIER_LIMITS["free"]})
+
+    _ensure_user(openid)
+    _reset_daily_counters(openid)
+    db = get_db()
+    row = db.execute(
+        "SELECT tier, searches_today, posters_today FROM users WHERE openid = %s",
+        [openid]
+    ).fetchone()
+    if not row:
+        return jsonify({"tier": "free", "limits": TIER_LIMITS["free"],
+                        "searches_used": 0, "posters_used": 0})
+
+    # 检查订阅是否过期
+    tier = row["tier"]
+    if tier != "free":
+        expire = db.execute(
+            "SELECT expires_at FROM users WHERE openid = %s", [openid]
+        ).fetchone()
+        if expire and expire["expires_at"] and expire["expires_at"] < datetime.now():
+            tier = "free"
+
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"])
+    return jsonify({
+        "tier": tier,
+        "limits": limits,
+        "searches_used": row["searches_today"],
+        "posters_used": row["posters_today"],
+    })
+
+
+@app.route("/api/increment-usage", methods=["POST"])
+def api_increment_usage():
+    """原子递增用量计数，返回是否超限"""
+    data = request.get_json() or {}
+    openid = data.get("openid", "").strip()
+    counter = data.get("counter", "searches")  # searches | posters
+    if not openid:
+        return jsonify({"allowed": True, "used": 0, "max": 9999})
+
+    _ensure_user(openid)
+    _reset_daily_counters(openid)
+    db = get_db()
+
+    # 原子递增
+    col = "searches_today" if counter == "searches" else "posters_today"
+    row = db.execute(
+        f"UPDATE users SET {col} = {col} + 1 WHERE openid = %s "
+        "RETURNING tier, searches_today, posters_today",
+        [openid]
+    ).fetchone()
+    db.commit()
+
+    if not row:
+        return jsonify({"allowed": True, "used": 0, "max": 9999})
+
+    used = row[col]
+    tier = row["tier"]
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"])
+    max_val = limits["searches"] if counter == "searches" else limits["posters"]
+
+    return jsonify({
+        "allowed": used <= max_val,
+        "used": used,
+        "max": max_val,
+        "tier": tier,
+    })
+
+
+@app.route("/api/activate", methods=["POST"])
+def api_activate():
+    """手动激活会员（管理端用，需 ADMIN_KEY 验证）"""
+    import os as _os
+    admin_key = _os.environ.get("ADMIN_KEY", "")
+    if not admin_key:
+        # 回退到文件读取
+        key_file = os.path.join(os.path.dirname(__file__), ".admin_key")
+        if os.path.exists(key_file):
+            with open(key_file) as f:
+                admin_key = f.read().strip()
+    if not admin_key:
+        return jsonify({"error": "admin key not configured"}), 500
+
+    data = request.get_json() or {}
+    if data.get("admin_key") != admin_key:
+        return jsonify({"error": "unauthorized"}), 403
+
+    openid = data.get("openid", "").strip()
+    tier = data.get("tier", "pro").strip()
+    days = int(data.get("days", 30))
+    if not openid:
+        return jsonify({"error": "missing openid"}), 400
+    if tier not in ("pro", "team"):
+        return jsonify({"error": "invalid tier"}), 400
+
+    _ensure_user(openid)
+    db = get_db()
+    db.execute(
+        "UPDATE users SET tier = %s, activated_at = NOW(), "
+        "expires_at = NOW() + INTERVAL '%s days' WHERE openid = %s",
+        [tier, days, openid]
+    )
+    db.commit()
+    return jsonify({"ok": True, "openid": openid, "tier": tier, "expires_days": days})
+
+
 @app.route("/api/generate-poster")
 def api_generate_poster():
     """生成项目分享海报，返回 PNG 图片"""
