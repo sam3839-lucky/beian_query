@@ -923,6 +923,14 @@ def api_latest_permits():
 def api_transactions_summary():
     """本月成交概览：总量、新房、二手房、环比、同比"""
     db = get_db()
+
+    # 最新交易日期
+    latest = db.execute(
+        "SELECT MAX(report_date) as dt FROM transaction_data "
+        "WHERE city_id=1 AND district_id != 5999"
+    ).fetchone()
+    latest_date = str(latest["dt"]) if latest and latest["dt"] else ""
+
     base = "WHERE city_id=1 AND district_id != 5999 "
     rows = db.execute(
         "SELECT TO_CHAR(report_date, 'YYYY-MM') as ym, "
@@ -971,6 +979,7 @@ def api_transactions_summary():
 
     return jsonify({
         "this_month": tm, "last_month": lm, "yoy_month": ym,
+        "latest_date": latest_date,
         "total_mom_pct": pct(tm["total"], lm["total"]) if tm and lm else 0,
         "total_yoy_pct": pct(tm["total"], ym["total"]) if tm and ym else 0,
         "new_mom_pct":   pct(tm["new"], lm["new"]) if tm and lm else 0,
