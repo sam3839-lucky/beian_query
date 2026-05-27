@@ -1053,6 +1053,49 @@ def api_transactions_trends():
     return jsonify({"trends": trends})
 
 
+@app.route("/api/project-sales-rank")
+def api_project_sales_rank():
+    """近N天楼盘销量排行（全市/分区）"""
+    zone = request.args.get("zone", "").strip()
+    days = request.args.get("days", 30, type=int)
+    db = get_db()
+
+    conds = [
+        "new_status IN ('已网签','已备案','已转移登记')",
+        "old_status = '未售'",
+        f"changed_at >= NOW() - INTERVAL '{days} days'",
+    ]
+    params = []
+    if zone:
+        conds.append("zone = %s")
+        params.append(zone)
+
+    where = " AND ".join(conds)
+    rows = db.execute(
+        f"SELECT project_name, zone, COUNT(*) as sold_count "
+        f"FROM unit_change_log WHERE {where} "
+        f"GROUP BY project_name, zone ORDER BY sold_count DESC LIMIT 10",
+        params
+    ).fetchall()
+
+    ranks = [{
+        "project_name": r["project_name"],
+        "zone": r["zone"],
+        "sold_count": r["sold_count"],
+    } for r in rows]
+
+    # 有数据的区域列表（供 tab 使用）
+    zone_rows = db.execute(
+        "SELECT zone, COUNT(*) as cnt FROM unit_change_log "
+        "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status = '未售' "
+        f"AND changed_at >= NOW() - INTERVAL '{days} days' "
+        "GROUP BY zone ORDER BY cnt DESC LIMIT 6"
+    ).fetchall()
+    zones = [r["zone"] for r in zone_rows]
+
+    return jsonify({"ranks": ranks, "zones": zones, "days": days})
+
+
 @app.route("/api/transactions/recent")
 def api_transactions_recent():
     """近期日成交明细（按日期聚合）"""
