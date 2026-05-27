@@ -1111,9 +1111,9 @@ def api_admin_status():
         "GROUP BY house_usage ORDER BY cnt DESC LIMIT 5"
     ).fetchall()
 
-    # 最近同步（用 created_at 替代 sync_batch，生产表无此列）
+    # 最近同步用 check_date 替代
     last_sync = db.execute(
-        "SELECT MAX(created_at) as batch FROM housing_units"
+        "SELECT MAX(check_date) as batch FROM housing_units"
     ).fetchone()["batch"] or "-"
 
     # 最近更新日期
