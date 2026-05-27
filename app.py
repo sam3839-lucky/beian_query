@@ -517,6 +517,20 @@ def api_generate_poster():
     )
 
 
+@app.route("/api/app-poster")
+def api_app_poster():
+    """生成小程序推广海报（引导关注）"""
+    try:
+        png_bytes = poster.generate_app_poster()
+    except Exception as e:
+        return jsonify({"error": f"poster generation failed"}), 500
+    return send_file(
+        io.BytesIO(png_bytes),
+        mimetype="image/png",
+        as_attachment=False,
+    )
+
+
 @app.route("/api/zones")
 def api_zones():
     """区域列表"""

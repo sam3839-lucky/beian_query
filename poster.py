@@ -234,3 +234,93 @@ def get_or_generate(project_name, **data):
     with open(cache_path, "wb") as f:
         f.write(png_bytes)
     return png_bytes, key
+
+
+def generate_app_poster():
+    """生成小程序推广海报 — 引导中介关注使用"""
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # ── 顶部品牌 ──
+    y = 60
+    draw.text((40, y), "深圳新房备案价格查询", fill=GRAY, font=_font(26))
+
+    # ── 主标题 ──
+    y = 130
+    title_font = _font(44, "bold")
+    draw.text((40, y), "3秒查备案价", fill=DARK, font=title_font)
+    y = 190
+    draw.text((40, y), "现场给客户看", fill=DARK, font=title_font)
+
+    # ── 副标题 ──
+    y = 260
+    draw.text((40, y), "官方数据 · 中介必备 · 免费使用", fill=GREEN, font=_font(28))
+    y = 300
+    draw.line([(40, y), (W - 40, y)], fill=BORDER, width=1)
+
+    # ── 三大功能亮点 ──
+    y = 360
+    features = [
+        ("全深圳38万套房源备案价", "与深圳市住建局公示数据同步更新"),
+        ("输入项目名3秒出价格对比", "客户在现场就能看到每套房的备案价"),
+        ("一手+二手每日成交数据分析", "龙岗多少套、南山均价多少，一目了然"),
+    ]
+    for title, desc in features:
+        # 标题
+        draw.text((40, y), "· " + title, fill=DARK, font=_font(32, "bold"))
+        y += 48
+        # 描述
+        draw.text((56, y), desc, fill=GRAY, font=_font(26))
+        y += 56
+
+    # ── 信任标识 ──
+    y = 610
+    trust_w = W - 80
+    draw.rounded_rectangle(
+        [(40, y), (40 + trust_w, y + 88)], radius=12, fill=LIGHT_BG
+    )
+    draw.text(((W - draw.textlength("数据来源：深圳市住房和建设局", font=_font(24))) / 2, y + 16),
+              "数据来源：深圳市住房和建设局", fill=GRAY, font=_font(24))
+    draw.text(((W - draw.textlength("与政府网站公示数据实时同步", font=_font(22))) / 2, y + 50),
+              "与政府网站公示数据实时同步", fill="#A8A8A8", font=_font(22))
+
+    # ── 二维码区 ──
+    qr_size = 240
+    qr_x = (W - qr_size) // 2
+    qr_y = 780
+
+    draw.rounded_rectangle(
+        [(qr_x - 40, qr_y - 30), (qr_x + qr_size + 40, qr_y + qr_size + 100)],
+        radius=16, fill=LIGHT_BG
+    )
+
+    try:
+        if os.path.exists(FALLBACK_QR):
+            qr_img = Image.open(FALLBACK_QR).convert("RGBA")
+        else:
+            raise FileNotFoundError
+        qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+        if qr_img.mode == "RGBA":
+            img.paste(qr_img, (qr_x, qr_y), qr_img)
+        else:
+            img.paste(qr_img, (qr_x, qr_y))
+    except (OSError, IOError, FileNotFoundError):
+        draw.rectangle([(qr_x, qr_y), (qr_x + qr_size, qr_y + qr_size)],
+                       outline=BORDER, width=2)
+
+    # 扫码引导
+    guide = "微信扫码 · 免费查深圳新房备案价"
+    gw = draw.textlength(guide, font=_font(26))
+    draw.text(((W - gw) / 2, qr_y + qr_size + 20), guide, fill=GRAY, font=_font(26))
+    guide2 = "深圳中介都在用的查价工具"
+    gw2 = draw.textlength(guide2, font=_font(24))
+    draw.text(((W - gw2) / 2, qr_y + qr_size + 52), guide2, fill="#A8A8A8", font=_font(24))
+
+    # ── 底部 ──
+    slogan = "备案查询 · 用备案查询"
+    sw = draw.textlength(slogan, font=_font(24))
+    draw.text(((W - sw) / 2, H - 56), slogan, fill=GREEN, font=_font(24))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
