@@ -626,7 +626,7 @@ def api_units():
     where = " AND ".join(conditions)
     sql = (
         f"SELECT unit_no, built_area, unit_price, total_price, "
-        f"house_usage, status, check_date, sale_type, building_name "
+        f"house_usage, status, check_date, building_name "
         f"FROM housing_units WHERE {where}"
     )
     rows = db.execute(sql, params).fetchall()
@@ -664,7 +664,6 @@ def api_units():
             "house_usage": r["house_usage"],
             "status": r["status"],
             "check_date": r["check_date"] or "",
-            "sale_type": r["sale_type"],
             "floor": floor,
             "building_name": r["building_name"],
         })
