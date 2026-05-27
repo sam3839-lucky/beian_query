@@ -553,7 +553,7 @@ def api_projects():
             "SELECT DISTINCT project_name FROM housing_units "
             "WHERE zone=%s AND project_name IS NOT NULL AND project_name != '' "
             f"AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY}) "
-            "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE date_listed >= '2020-01-01') "
+            ""
             "ORDER BY project_name",
             [zone],
         ).fetchall()
@@ -562,7 +562,7 @@ def api_projects():
             "SELECT DISTINCT project_name FROM housing_units "
             "WHERE project_name IS NOT NULL AND project_name != '' "
             f"AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE status='未售' AND house_usage='住宅' AND {UNSOLD_RECENCY}) "
-            "AND project_name IN (SELECT DISTINCT project_name FROM housing_units WHERE date_listed >= '2020-01-01') "
+            ""
             "ORDER BY project_name"
         ).fetchall()
     projects = [r["project_name"].strip() for r in rows if r["project_name"].strip()]
