@@ -138,14 +138,13 @@ def api_quick_search():
         placeholders = ", ".join(["%s"] * len(match_names))
         sql = (
             "SELECT h.project_name, h.zone, "
-            "MAX(p.developer) as developer, "
+            "(SELECT p.developer FROM presale_permits p WHERE p.project_name = h.project_name LIMIT 1) as developer, "
             "COUNT(*) as unsold_count, "
             "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
             "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
             "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
             "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
             "FROM housing_units h "
-            "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
             "WHERE h.house_usage='住宅' AND h.status='未售' "
             f"AND {UNSOLD_RECENCY} "
             f"AND h.project_name IN ({placeholders}) "
@@ -157,14 +156,13 @@ def api_quick_search():
     else:
         sql = (
             "SELECT h.project_name, h.zone, "
-            "MAX(p.developer) as developer, "
+            "(SELECT p.developer FROM presale_permits p WHERE p.project_name = h.project_name LIMIT 1) as developer, "
             "COUNT(*) as unsold_count, "
             "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
             "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
             "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
             "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
             "FROM housing_units h "
-            "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
             "WHERE h.house_usage='住宅' AND h.status='未售' "
             f"AND {UNSOLD_RECENCY} "
             "AND (h.project_name ILIKE %s OR h.zone ILIKE %s) "
