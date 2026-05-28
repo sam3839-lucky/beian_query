@@ -23,6 +23,10 @@ DB_CONFIG = {
     "host": os.environ.get("DB_HOST", "localhost"),
 }
 
+def zone_name(name):
+    """标准化区域名（深汕合作→深汕）"""
+    return "深汕" if name == "深汕合作" else name
+
 # 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
 UNSOLD_STALE_DAYS = 2190  # 6 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
@@ -189,7 +193,7 @@ def api_quick_search():
 
         results.append({
             "project_name": name,
-            "zone": r["zone"] or "",
+            "zone": zone_name(r["zone"] or ""),
             "unsold_count": r["unsold_count"],
             "avg_unit": float(r["avg_unit"] or 0),
             "avg_total": float(r["avg_total"] or 0),
@@ -296,7 +300,7 @@ def api_my_subscriptions():
 
     subs = [{
         "project_name": r["project_name"],
-        "zone": r["zone"] or "",
+        "zone": zone_name(r["zone"] or ""),
         "unsold_count": r["unsold_count"],
         "avg_total": float(r["avg_total"] or 0),
         "subscribed_at": str(r["subscribed_at"]) if r["subscribed_at"] else "",
@@ -536,7 +540,7 @@ def api_zones():
     rows = db.execute(
         f"SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage='住宅' AND status='未售' AND {UNSOLD_RECENCY} ORDER BY zone"
     ).fetchall()
-    zones = [r["zone"] for r in rows]
+    zones = [zone_name(r["zone"]) for r in rows]
     zones.sort(key=pinyin_sort_key)
     return jsonify({"zones": zones})
 
@@ -817,7 +821,7 @@ def api_overview():
                 sales_map[k] = max(r["daily_avg"] or 0, 0.01)
 
     zones = [{
-        "name": r["zone"], "count": r["cnt"],
+        "name": zone_name(r["zone"]), "count": r["cnt"],
         "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0),
         "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01) / 30, 1),
     } for r in zone_rows]
@@ -901,7 +905,7 @@ def api_latest_permits():
         result.append({
             "project_name": r["project_name"] or "",
             "developer": r["developer"] or "",
-            "zone": r["zone"] or "",
+            "zone": zone_name(r["zone"] or ""),
             "pass_date": r["pass_date"] or "",
             "unsold": u,
         })
@@ -1188,7 +1192,7 @@ def api_admin_status():
         "last_check": last_check,
         "permits": permits,
         "db_size_mb": db_size_mb,
-        "zones": [{"name": r["zone"], "unsold": r["cnt"]} for r in zone_rows],
+        "zones": [{"name": zone_name(r["zone"]), "unsold": r["cnt"]} for r in zone_rows],
     })
 
 
