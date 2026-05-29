@@ -28,7 +28,7 @@ def zone_name(name):
     return "深汕" if name == "深汕合作" else name
 
 # 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
-UNSOLD_STALE_DAYS = 2190  # 6 年
+UNSOLD_STALE_DAYS = 1095  # 3 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
 
 # ── 微信小程序配置（部署时改） ──
@@ -843,7 +843,7 @@ def api_overview():
 def api_rankings():
     """榜单：总价最低/最高 + 单价最低/最高"""
     db = get_db()
-    base = f"WHERE house_usage='住宅' AND status='未售' AND total_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
+    base = f"WHERE house_usage='住宅' AND status='未售' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
     def run(order):
         return db.execute(
@@ -1194,6 +1194,241 @@ def api_admin_status():
         "db_size_mb": db_size_mb,
         "zones": [{"name": zone_name(r["zone"]), "unsold": r["cnt"]} for r in zone_rows],
     })
+
+
+# ── 小区历史成交价查询 ──
+
+
+@app.route("/api/project-history-search-meta")
+def api_project_history_search_meta():
+    """搜索页初始化数据：热门小区 + 区域统计"""
+    db = get_db()
+    hot = db.execute("""
+        SELECT project_name, zone, COUNT(*) as cnt,
+               ROUND(AVG(unit_price) FILTER (WHERE unit_price > 0)) as avg_price
+        FROM housing_units
+        WHERE project_name IS NOT NULL AND check_date >= '2020-01-01'
+        GROUP BY project_name, zone ORDER BY cnt DESC LIMIT 20
+    """).fetchall()
+    zones = db.execute("""
+        SELECT zone, COUNT(DISTINCT project_name) as project_count,
+               COUNT(*) as record_count
+        FROM housing_units
+        WHERE project_name IS NOT NULL AND check_date >= '2010-01-01'
+          AND zone IS NOT NULL
+        GROUP BY zone ORDER BY record_count DESC
+    """).fetchall()
+    return jsonify({
+        "hot": [{"project_name": r["project_name"], "zone": zone_name(r["zone"] or ""),
+                 "count": r["cnt"], "avg_price": float(r["avg_price"] or 0)} for r in hot],
+        "zones": [{"zone": zone_name(r["zone"]), "project_count": r["project_count"],
+                   "record_count": r["record_count"]} for r in zones],
+    })
+
+
+@app.route("/api/project-history-search")
+def api_project_history_search():
+    """小区搜索：模糊匹配 + 区域筛选"""
+    q = request.args.get("q", "").strip()
+    zone = request.args.get("zone", "").strip()
+
+    conditions = ["project_name IS NOT NULL", "check_date >= '2010-01-01'"]
+    params = []
+
+    if q:
+        conditions.append("project_name ILIKE %s")
+        params.append(f"%{q}%")
+    if zone:
+        conditions.append("zone = %s")
+        params.append(zone)
+
+    where = " AND ".join(conditions)
+    sql = f"""
+        SELECT project_name, zone, COUNT(*) as record_count,
+               MIN(check_date) as earliest, MAX(check_date) as latest,
+               ROUND(AVG(unit_price) FILTER (WHERE unit_price > 0)) as avg_price
+        FROM housing_units
+        WHERE {where}
+        GROUP BY project_name, zone
+        ORDER BY record_count DESC
+        LIMIT 50
+    """
+    rows = get_db().execute(sql, params).fetchall()
+    results = [{
+        "project_name": r["project_name"] or "",
+        "zone": zone_name(r["zone"] or ""),
+        "record_count": r["record_count"],
+        "earliest": r["earliest"] or "",
+        "latest": r["latest"] or "",
+        "avg_price": float(r["avg_price"] or 0),
+    } for r in rows]
+    return jsonify({"projects": results})
+
+
+@app.route("/api/project-history")
+def api_project_history():
+    """小区历史成交：趋势 + 摘要 + 筛选选项 + 分页列表"""
+    project = request.args.get("project", "").strip()
+    if not project:
+        return jsonify({"error": "project required"}), 400
+
+    years = request.args.get("years", "").strip()
+    building = request.args.get("building", "").strip()
+    sort = request.args.get("sort", "date_desc")
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(request.args.get("limit", 50, type=int), 200)
+
+    conditions = ["project_name = %s"]
+    params = [project]
+
+    if years:
+        year_list = [y.strip() for y in years.split(",") if y.strip().isdigit()]
+        if year_list:
+            placeholders = ",".join(["%s"] * len(year_list))
+            conditions.append(f"SUBSTRING(check_date,1,4) IN ({placeholders})")
+            params.extend(year_list)
+    if building:
+        conditions.append("building_name = %s")
+        params.append(building)
+
+    where = " AND ".join(conditions)
+    db = get_db()
+
+    # 1. 年度均价趋势
+    trend_rows = db.execute(f"""
+        SELECT SUBSTRING(check_date,1,4) as year,
+               ROUND(AVG(unit_price) FILTER (WHERE unit_price > 0)) as avg_price,
+               COUNT(*) as cnt
+        FROM housing_units WHERE {where}
+        GROUP BY year ORDER BY year
+    """, params).fetchall()
+    trend = [{"year": r["year"], "avg_price": float(r["avg_price"] or 0), "count": r["cnt"]} for r in trend_rows]
+
+    # 2. 摘要统计
+    summary_row = db.execute(f"""
+        SELECT COUNT(*) as total_records,
+               ROUND(AVG(unit_price) FILTER (WHERE unit_price > 0)) as avg_price,
+               MAX(unit_price) FILTER (WHERE unit_price > 0) as max_price,
+               MIN(unit_price) FILTER (WHERE unit_price > 0) as min_price,
+               ROUND(AVG(CASE WHEN total_price > 0 THEN total_price END)::numeric/10000, 1) as avg_total_wan,
+               ROUND(AVG(CASE WHEN built_area > 0 THEN built_area END)::numeric, 1) as avg_area
+        FROM housing_units WHERE {where}
+    """, params).fetchone()
+
+    # 3. 可选楼栋
+    buildings = [{"name": r["building_name"], "count": r["cnt"]} for r in db.execute(f"""
+        SELECT building_name, COUNT(*) as cnt
+        FROM housing_units WHERE {where} AND building_name IS NOT NULL
+        GROUP BY building_name ORDER BY cnt DESC
+    """, params).fetchall()]
+
+    # 4. 可选年份
+    years_list = [r["year"] for r in db.execute(f"""
+        SELECT DISTINCT SUBSTRING(check_date,1,4) as year
+        FROM housing_units WHERE {where} ORDER BY year DESC
+    """, params).fetchall()]
+
+    # 5. 成交记录（分页）
+    order_map = {
+        "date_desc": "check_date DESC",
+        "date_asc": "check_date ASC",
+        "price_desc": "unit_price DESC NULLS LAST",
+        "price_asc": "unit_price ASC NULLS LAST",
+    }
+    order_clause = order_map.get(sort, "check_date DESC")
+    list_rows = db.execute(f"""
+        SELECT id, check_date, building_name, unit_no, built_area,
+               unit_price, total_price, house_usage, house_attr, status, zone, unit_type
+        FROM housing_units WHERE {where}
+        ORDER BY {order_clause}
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]).fetchall()
+    records = [{
+        "id": r["id"],
+        "date": r["check_date"] or "",
+        "building": r["building_name"] or "",
+        "unit_no": r["unit_no"] or "",
+        "area": float(r["built_area"] or 0),
+        "unit_price": float(r["unit_price"] or 0),
+        "total_price_wan": round(float(r["total_price"] or 0) / 10000, 1),
+        "usage": r["house_usage"] or "",
+        "attr": r["house_attr"] or "",
+        "status": r["status"] or "",
+        "layout": r["unit_type"] or "",
+    } for r in list_rows]
+
+    return jsonify({
+        "project": project,
+        "zone": zone_name(list_rows[0]["zone"] or "") if list_rows else "",
+        "summary": {
+            "total_records": summary_row["total_records"],
+            "avg_price": float(summary_row["avg_price"] or 0),
+            "max_price": float(summary_row["max_price"] or 0),
+            "min_price": float(summary_row["min_price"] or 0),
+            "avg_total_wan": float(summary_row["avg_total_wan"] or 0),
+            "avg_area": float(summary_row["avg_area"] or 0),
+        },
+        "trend": trend,
+        "buildings": buildings,
+        "years": years_list,
+        "records": records,
+    })
+
+
+@app.route("/api/project-history-detail")
+def api_project_history_detail():
+    """成交详情：单条记录 + 同小区近期成交"""
+    uid = request.args.get("id", 0, type=int)
+    if not uid:
+        return jsonify({"error": "id required"}), 400
+
+    db = get_db()
+    row = db.execute("""
+        SELECT id, project_name, zone, check_date, building_name, unit_no,
+               built_area, unit_price, total_price, house_usage, house_attr,
+               status, permit_no, parcel_no
+        FROM housing_units WHERE id = %s
+    """, (uid,)).fetchone()
+
+    if not row:
+        return jsonify({"error": "not found"}), 404
+
+    detail = {
+        "id": row["id"],
+        "project_name": row["project_name"] or "",
+        "zone": zone_name(row["zone"] or ""),
+        "date": row["check_date"] or "",
+        "building": row["building_name"] or "",
+        "unit_no": row["unit_no"] or "",
+        "area": float(row["built_area"] or 0),
+        "unit_price": float(row["unit_price"] or 0),
+        "total_price_wan": round(float(row["total_price"] or 0) / 10000, 1),
+        "usage": row["house_usage"] or "",
+        "attr": row["house_attr"] or "",
+        "status": row["status"] or "",
+        "permit_no": row["permit_no"] or "",
+        "parcel_no": row["parcel_no"] or "",
+    }
+
+    # 同小区近期成交（最多5条）
+    recent_rows = db.execute("""
+        SELECT id, check_date, building_name, unit_no, built_area,
+               unit_price, total_price
+        FROM housing_units
+        WHERE project_name = %s AND id != %s
+        ORDER BY check_date DESC LIMIT 5
+    """, (row["project_name"], uid)).fetchall()
+    recent = [{
+        "id": r["id"],
+        "date": r["check_date"] or "",
+        "building": r["building_name"] or "",
+        "unit_no": r["unit_no"] or "",
+        "area": float(r["built_area"] or 0),
+        "unit_price": float(r["unit_price"] or 0),
+        "total_price_wan": round(float(r["total_price"] or 0) / 10000, 1),
+    } for r in recent_rows]
+
+    return jsonify({"detail": detail, "recent": recent})
 
 
 if __name__ == "__main__":
