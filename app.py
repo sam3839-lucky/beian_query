@@ -790,12 +790,13 @@ def api_overview():
         "FROM housing_units WHERE house_usage='住宅'"
     ).fetchone()
 
-    # 各区未售住宅统计（全部区域）
+    # 各区未售住宅统计（仅预售，排除现售）
     zone_rows = db.execute(
         "SELECT zone, COUNT(*) as cnt, "
         "ROUND((AVG(total_price)/10000)::numeric, 1) as avg_t, "
         "ROUND(AVG(unit_price)::numeric, 0) as avg_u "
         f"FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
+        "AND EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
 
