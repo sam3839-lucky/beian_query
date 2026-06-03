@@ -784,9 +784,8 @@ def api_overview():
         "SELECT "
         "COUNT(*) as total, "
         f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) as unsold, "
-        "SUM(CASE WHEN status='已网签' THEN 1 ELSE 0 END) as signed, "
-        "SUM(CASE WHEN status='已备案' THEN 1 ELSE 0 END) as filed, "
-        "SUM(CASE WHEN status='已转移登记' THEN 1 ELSE 0 END) as transferred, "
+        f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} AND EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) THEN 1 ELSE 0 END) as presale, "
+        f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} AND NOT EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) THEN 1 ELSE 0 END) as spot_sale, "
         f"ROUND((AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN total_price END)/10000)::numeric, 1) as avg_total, "
         f"ROUND(AVG(CASE WHEN status='未售' AND total_price>0 AND {UNSOLD_RECENCY} THEN unit_price END)::numeric, 0) as avg_unit, "
         f"SUM(CASE WHEN status='未售' AND {UNSOLD_RECENCY} AND EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name AND p.pass_date >= (CURRENT_DATE - INTERVAL '1 month')::text) THEN 1 ELSE 0 END) as recent, "
@@ -837,6 +836,8 @@ def api_overview():
     return jsonify({
         "total": row["total"],
         "unsold": row["unsold"],
+        "presale": row["presale"],
+        "spot_sale": row["spot_sale"],
         "signed": row["signed"],
         "filed": row["filed"],
         "transferred": row["transferred"],
