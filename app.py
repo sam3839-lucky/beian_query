@@ -846,7 +846,7 @@ def api_overview():
 def api_rankings():
     """榜单：总价最低/最高 + 单价最低/最高"""
     db = get_db()
-    base = f"WHERE house_usage='住宅' AND status='未售' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
+    base = f"WHERE house_usage='住宅' AND status='未售' AND project_name IS NOT NULL AND project_name != '' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
     def run(order):
         return db.execute(
