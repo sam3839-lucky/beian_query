@@ -630,7 +630,8 @@ def api_units():
         f"SELECT unit_no, built_area, unit_price, total_price, "
         f"house_usage, status, check_date, building_name, "
         f"CASE WHEN EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) "
-        f"THEN '预售' ELSE '现售' END as sale_type "
+        f"THEN '预售' ELSE '现售' END as sale_type, "
+        f"(SELECT pass_date FROM presale_permits p WHERE p.project_name = housing_units.project_name LIMIT 1) as permit_date "
         f"FROM housing_units WHERE {where}"
     )
     rows = db.execute(sql, params).fetchall()
@@ -668,6 +669,7 @@ def api_units():
             "house_usage": r["house_usage"],
             "status": r["status"],
             "check_date": r["check_date"] or "",
+            "permit_date": r["permit_date"] or "",
             "sale_type": r["sale_type"],
             "floor": floor,
             "building_name": r["building_name"],
