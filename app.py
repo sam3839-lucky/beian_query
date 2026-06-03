@@ -31,6 +31,9 @@ def zone_name(name):
 UNSOLD_STALE_DAYS = 1095  # 3 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
 
+# 统计窗口：只统计 5 年内有未售活动的楼盘
+STATS_WINDOW = "check_date >= (CURRENT_DATE - INTERVAL '5 years')::text"
+
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
 WECHAT_SECRET = os.environ.get("WECHAT_SECRET", "")
@@ -700,7 +703,8 @@ def api_stats():
     db = get_db()
     
     # 构建条件：仅当用户主动设置筛选时才加价格/面积条件
-    conds = ["house_usage='住宅'"]
+    # 5 年窗口：只统计近 5 年有房源活动的楼盘
+    conds = ["house_usage='住宅'", STATS_WINDOW]
     params = []
     has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 9999)
     if has_filter:
@@ -749,6 +753,9 @@ def api_stats():
         ).fetchone()["cnt"]
 
     unsold = total - sold
+    # 5 年内无在售房源 → 楼盘已售罄，不做统计
+    if unsold <= 0:
+        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
     project_total = total if not building else db.execute(
         "SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s",
         [project],
