@@ -1047,6 +1047,7 @@ def api_transactions_trends():
         "SUM(deal_area) as area "
         f"FROM transaction_data "
         f"WHERE city_id=1 AND district_id != 5999 "
+        "AND TO_CHAR(report_date, 'YYYY-MM') != TO_CHAR(CURRENT_DATE, 'YYYY-MM') "
         "GROUP BY month ORDER BY month DESC LIMIT %s",
         [months]
     ).fetchall()
@@ -1186,6 +1187,7 @@ def api_dashboard():
         "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
         "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as uc "
         "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+        "AND TO_CHAR(report_date,'YYYY-MM') != TO_CHAR(CURRENT_DATE,'YYYY-MM') "
         "GROUP BY m ORDER BY m DESC LIMIT %s", [months]
     ).fetchall()
     result["trends"] = [{"month": r["m"], "new": r["nc"] or 0, "used": r["uc"] or 0, "total": (r["nc"] or 0)+(r["uc"] or 0)} for r in trows]
