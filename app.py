@@ -1134,6 +1134,91 @@ def api_transactions_recent():
     return jsonify({"items": items})
 
 
+@app.route("/api/dashboard")
+def api_dashboard():
+    """成交仪表盘 — 一次请求替代 5 个独立调用"""
+    db = get_db()
+    result = {}
+
+    # summary
+    latest = db.execute(
+        "SELECT MAX(report_date) as dt FROM transaction_data WHERE city_id=1 AND district_id!=5999"
+    ).fetchone()
+    latest_date = str(latest["dt"]) if latest and latest["dt"] else ""
+    rows = db.execute(
+        "SELECT TO_CHAR(report_date,'YYYY-MM') as ym, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as uc "
+        "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+        "GROUP BY ym ORDER BY ym DESC LIMIT 2"
+    ).fetchall()
+    r0 = rows[0] if rows else None
+    r1 = rows[1] if len(rows) > 1 else None
+    result["summary"] = {
+        "latest_date": latest_date,
+        "this_month": {"month": r0["ym"] if r0 else "", "new": r0["nc"] or 0 if r0 else 0, "used": r0["uc"] or 0 if r0 else 0, "total": (r0["nc"] or 0)+(r0["uc"] or 0) if r0 else 0} if r0 else None,
+        "last_month": {"total": (r1["nc"] or 0)+(r1["uc"] or 0) if r1 else 0, "new": r1["nc"] or 0 if r1 else 0, "used": r1["uc"] or 0 if r1 else 0} if r1 else None,
+    }
+
+    # districts
+    cur = db.execute("SELECT TO_CHAR(report_date,'YYYY-MM') as ym FROM transaction_data WHERE city_id=1 ORDER BY report_date DESC LIMIT 1").fetchone()
+    if cur:
+        ym = cur["ym"]
+        def _pt(pt):
+            rs = db.execute(
+                "SELECT d.name as z, SUM(t.deal_count) as c FROM transaction_data t "
+                "JOIN districts d ON d.id=t.district_id WHERE t.property_type_id=%s "
+                "AND t.city_id=1 AND TO_CHAR(t.report_date,'YYYY-MM')=%s AND d.name!='全市' "
+                "GROUP BY d.name ORDER BY c DESC", [pt, ym]
+            ).fetchall()
+            t = sum(r["c"] for r in rs)
+            return {"items": [{"zone": r["z"], "count": r["c"], "pct": round(r["c"]/t*100,1) if t else 0} for r in rs[:8]], "total": t}
+        result["districts"] = {"new": _pt(1), "used": _pt(2)}
+    else:
+        result["districts"] = {"new": {"items": []}, "used": {"items": []}}
+
+    # trends
+    months = request.args.get("months", 12, type=int)
+    trows = db.execute(
+        "SELECT TO_CHAR(report_date,'YYYY-MM') as m, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as uc "
+        "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+        "GROUP BY m ORDER BY m DESC LIMIT %s", [months]
+    ).fetchall()
+    result["trends"] = [{"month": r["m"], "new": r["nc"] or 0, "used": r["uc"] or 0, "total": (r["nc"] or 0)+(r["uc"] or 0)} for r in trows]
+
+    # recent
+    days = request.args.get("days", 14, type=int)
+    rrows = db.execute(
+        "SELECT TO_CHAR(report_date,'YYYY-MM-DD') as dt, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as uc "
+        "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+        "GROUP BY dt ORDER BY dt DESC LIMIT %s", [days]
+    ).fetchall()
+    result["dailyItems"] = [{"date": r["dt"], "new": r["nc"] or 0, "used": r["uc"] or 0, "total": (r["nc"] or 0)+(r["uc"] or 0)} for r in rrows]
+
+    # sales_rank
+    sdays = request.args.get("sales_days", 30, type=int)
+    srows = db.execute(
+        "SELECT project_name, zone, COUNT(*) as sc FROM unit_change_log "
+        "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status='未售' "
+        f"AND changed_at >= NOW() - INTERVAL '{sdays} days' "
+        "GROUP BY project_name, zone ORDER BY sc DESC LIMIT 10"
+    ).fetchall()
+    zrows = db.execute(
+        "SELECT zone, COUNT(*) as cnt FROM unit_change_log "
+        "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status='未售' "
+        f"AND changed_at >= NOW() - INTERVAL '{sdays} days' "
+        "GROUP BY zone ORDER BY cnt DESC LIMIT 6"
+    ).fetchall()
+    result["salesRanks"] = [{"project_name": r["project_name"], "zone": r["zone"], "sold_count": r["sc"]} for r in srows]
+    result["salesZones"] = [r["zone"] for r in zrows]
+
+    return jsonify(result)
+
+
 # ═══════════════════════════════════════════
 # 运营后台 API
 # ═══════════════════════════════════════════
