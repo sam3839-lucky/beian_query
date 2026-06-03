@@ -553,17 +553,20 @@ def api_projects():
     """小区列表，可按区域筛选（仅2019年后开盘 + 有可售房源）"""
     zone = request.args.get("zone", "")
     db = get_db()
-    base_cond = f"house_usage='住宅' AND status='未售' AND {UNSOLD_RECENCY} AND project_name IS NOT NULL AND project_name != ''"
+    base_cond = f"h.house_usage='住宅' AND h.status='未售' AND {UNSOLD_RECENCY} AND h.project_name IS NOT NULL AND h.project_name != ''"
+    base_cond += f" AND (p.pass_date IS NULL OR p.pass_date >= (CURRENT_DATE - INTERVAL '5 years')::text)"
     if zone:
         rows = db.execute(
-            f"SELECT DISTINCT project_name FROM housing_units "
-            f"WHERE zone=%s AND {base_cond} ORDER BY project_name",
+            f"SELECT DISTINCT h.project_name FROM housing_units h "
+            f"LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+            f"WHERE h.zone=%s AND {base_cond} ORDER BY h.project_name",
             [zone],
         ).fetchall()
     else:
         rows = db.execute(
-            f"SELECT DISTINCT project_name FROM housing_units "
-            f"WHERE {base_cond} ORDER BY project_name"
+            f"SELECT DISTINCT h.project_name FROM housing_units h "
+            f"LEFT JOIN presale_permits p ON p.project_name = h.project_name "
+            f"WHERE {base_cond} ORDER BY h.project_name"
         ).fetchall()
     projects = [r["project_name"].strip() for r in rows if r["project_name"].strip()]
     projects.sort(key=pinyin_sort_key)
