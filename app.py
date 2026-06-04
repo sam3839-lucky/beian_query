@@ -748,7 +748,10 @@ def api_stats():
 
 @app.route("/api/overview")
 def api_overview():
-    """首页总览：市场概况数据（单次聚合查询）"""
+    """首页总览：市场概况数据（5 分钟内存缓存）"""
+    import time
+    if hasattr(api_overview, "_cache") and (time.time() - api_overview._cache.get("ts", 0)) < 300:
+        return jsonify(api_overview._cache["data"])
     db = get_db()
 
     row = db.execute(
@@ -814,7 +817,7 @@ def api_overview():
         "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01) / 30, 1),
     } for r in zone_rows]
 
-    return jsonify({
+    data = {
         "total": row["total"],
         "unsold": row["unsold"],
         "presale": row["presale"],
@@ -826,7 +829,9 @@ def api_overview():
         "avg_unit": float(row["avg_unit"] or 0),
         "recent": row["recent"],
         "zones": zones,
-    })
+    }
+    api_overview._cache = {"data": data, "ts": time.time()}
+    return jsonify(data)
 
 
 @app.route("/api/rankings")
