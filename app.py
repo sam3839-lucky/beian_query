@@ -719,8 +719,8 @@ def api_stats():
         base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
         row = db.execute(
             "SELECT COUNT(*) FILTER (WHERE h.status='未售') as unsold, "
-            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NOT NULL) as presale, "
-            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NULL) as spot_sale "
+            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NULL) as presale, "
+            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NOT NULL) as spot_sale "
             f"FROM housing_units h "
             "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='已转移登记') pp ON pp.project_name = h.project_name "
             f"WHERE {base_where} {extra_cond}", p
@@ -755,8 +755,8 @@ def api_overview():
         "SELECT "
         "COUNT(*) as total, "
         f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) as unsold, "
-        f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} AND pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as presale, "
-        f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} AND pp.project_name IS NULL THEN 1 ELSE 0 END) as spot_sale, "
+        f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} AND pp.project_name IS NULL THEN 1 ELSE 0 END) as presale, "
+        f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} AND pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as spot_sale, "
         "SUM(CASE WHEN h.status='已网签' THEN 1 ELSE 0 END) as signed, "
         "SUM(CASE WHEN h.status='已备案' THEN 1 ELSE 0 END) as filed, "
         "SUM(CASE WHEN h.status='已转移登记' THEN 1 ELSE 0 END) as transferred, "
@@ -776,8 +776,8 @@ def api_overview():
     # 各区未售住宅统计（仅预售，排除现售）
     zone_rows = db.execute(
         "SELECT h.zone, COUNT(*) as cnt, "
-        "SUM(CASE WHEN pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as presale_cnt, "
-        "SUM(CASE WHEN pp.project_name IS NULL THEN 1 ELSE 0 END) as spot_cnt, "
+        "SUM(CASE WHEN pp.project_name IS NULL THEN 1 ELSE 0 END) as presale_cnt, "
+        "SUM(CASE WHEN pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as spot_cnt, "
         "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_t, "
         "ROUND(AVG(h.unit_price)::numeric, 0) as avg_u "
         f"FROM housing_units h "
