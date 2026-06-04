@@ -713,62 +713,33 @@ def api_stats():
         params.extend([price_min, price_max, area_min, area_max])
     where_extra = " AND " + " AND ".join(conds) if conds else ""
     
+    # 构建 COUNT SQL 的辅助函数
+    def _count_stats(extra_cond="", extra_params=None):
+        p = (extra_params or []) + params
+        base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
+        row = db.execute(
+            "SELECT COUNT(*) FILTER (WHERE h.status='未售') as unsold, "
+            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NOT NULL) as presale, "
+            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NULL) as spot_sale "
+            f"FROM housing_units h "
+            "LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits) pp ON pp.project_name = h.project_name "
+            f"WHERE {base_where} {extra_cond}", p
+        ).fetchone()
+        return dict(row)
+
     if zone and not project:
-        total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=%s{where_extra}",
-            [zone] + params,
-        ).fetchone()["cnt"]
-        sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE zone=%s AND status!='未售'{where_extra}",
-            [zone] + params,
-        ).fetchone()["cnt"]
-        unsold = total - sold
-        return jsonify({
-            "total": total, "sold": sold, "unsold": unsold,
-            "project_total": total,
-            "sold_pct": round(sold / total * 100, 1) if total else 0,
-            "unsold_pct": round(unsold / total * 100, 1) if total else 0,
-        })
-    
+        d = _count_stats("AND h.zone=%s", [zone])
+        return jsonify({"unsold": d["unsold"], "presale": d["presale"], "spot_sale": d["spot_sale"], "sold_out": d["unsold"] <= 0})
+
     if not project:
-        return jsonify({"total": 0, "sold": 0, "unsold": 0})
+        return jsonify({"unsold": 0, "presale": 0, "spot_sale": 0, "sold_out": True})
 
-    if building:
-        total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND building_name=%s{where_extra}",
-            [project, building] + params,
-        ).fetchone()["cnt"]
-        sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND building_name=%s AND status!='未售'{where_extra}",
-            [project, building] + params,
-        ).fetchone()["cnt"]
-    else:
-        total = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s{where_extra}",
-            [project] + params,
-        ).fetchone()["cnt"]
-        sold = db.execute(
-            f"SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s AND status!='未售'{where_extra}",
-            [project] + params,
-        ).fetchone()["cnt"]
-
-    unsold = total - sold
-    # 5 年内无在售房源 → 楼盘已售罄，不做统计
-    if unsold <= 0:
-        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
-    project_total = total if not building else db.execute(
-        "SELECT COUNT(*) as cnt FROM housing_units WHERE project_name=%s",
-        [project],
-    ).fetchone()["cnt"]
-
-    return jsonify({
-        "total": total,
-        "sold": sold,
-        "unsold": unsold,
-        "project_total": project_total,
-        "sold_pct": round(sold / total * 100, 1) if total else 0,
-        "unsold_pct": round(unsold / total * 100, 1) if total else 0,
-    })
+    cond = "AND h.project_name=%s AND h.building_name=%s" if building else "AND h.project_name=%s"
+    eparams = [project, building] if building else [project]
+    d = _count_stats(cond, eparams)
+    if d["unsold"] <= 0:
+        return jsonify({"unsold": 0, "presale": 0, "spot_sale": 0, "sold_out": True})
+    return jsonify({"unsold": d["unsold"], "presale": d["presale"], "spot_sale": d["spot_sale"]})
 
 
 # ═══════════════════════════════════════════
@@ -804,12 +775,15 @@ def api_overview():
 
     # 各区未售住宅统计（仅预售，排除现售）
     zone_rows = db.execute(
-        "SELECT zone, COUNT(*) as cnt, "
-        "ROUND((AVG(total_price)/10000)::numeric, 1) as avg_t, "
-        "ROUND(AVG(unit_price)::numeric, 0) as avg_u "
-        f"FROM housing_units WHERE house_usage='住宅' AND status='未售' AND zone != '' AND {UNSOLD_RECENCY} "
-        "AND EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) "
-        "GROUP BY zone ORDER BY cnt DESC"
+        "SELECT h.zone, COUNT(*) as cnt, "
+        "SUM(CASE WHEN pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as presale_cnt, "
+        "SUM(CASE WHEN pp.project_name IS NULL THEN 1 ELSE 0 END) as spot_cnt, "
+        "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_t, "
+        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_u "
+        f"FROM housing_units h "
+        "LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits) pp ON pp.project_name = h.project_name "
+        f"WHERE h.house_usage='住宅' AND h.status='未售' AND h.zone != '' AND {UNSOLD_RECENCY} "
+        "GROUP BY h.zone ORDER BY cnt DESC"
     ).fetchall()
 
     # 近90天各区一手住宅日均成交量
@@ -835,6 +809,7 @@ def api_overview():
 
     zones = [{
         "name": zone_name(r["zone"]), "count": r["cnt"],
+        "presale": r["presale_cnt"], "spot_sale": r["spot_cnt"],
         "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0),
         "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01) / 30, 1),
     } for r in zone_rows]
