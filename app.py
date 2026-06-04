@@ -763,6 +763,7 @@ def api_overview():
         "SUM(CASE WHEN h.status='已网签' THEN 1 ELSE 0 END) as signed, "
         "SUM(CASE WHEN h.status='已备案' THEN 1 ELSE 0 END) as filed, "
         "SUM(CASE WHEN h.status='已转移登记' THEN 1 ELSE 0 END) as transferred, "
+        f"ROUND((SUM(CASE WHEN h.status='未售' AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.total_price ELSE 0 END) / NULLIF(SUM(CASE WHEN h.status='未售' AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.built_area ELSE 0 END), 0))::numeric, 0) as avg_unit_price, "
         f"ROUND((AVG(CASE WHEN h.status='未售' AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.total_price END)/10000)::numeric, 1) as avg_total, "
         f"ROUND(AVG(CASE WHEN h.status='未售' AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.unit_price END)::numeric, 0) as avg_unit, "
         f"SUM(CASE WHEN h.status='未售' AND {UNSOLD_RECENCY} AND ppr.project_name IS NOT NULL THEN 1 ELSE 0 END) as recent, "
@@ -827,6 +828,7 @@ def api_overview():
         "transferred": row["transferred"],
         "avg_total": float(row["avg_total"] or 0),
         "avg_unit": float(row["avg_unit"] or 0),
+        "avg_unit_price": float(row["avg_unit_price"] or 0),
         "recent": row["recent"],
         "zones": zones,
     }
