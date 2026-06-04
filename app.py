@@ -632,8 +632,8 @@ def api_units():
     sql = (
         f"SELECT unit_no, built_area, unit_price, total_price, "
         f"house_usage, status, check_date, building_name, "
-        f"CASE WHEN EXISTS (SELECT 1 FROM presale_permits p WHERE p.project_name = housing_units.project_name) "
-        f"THEN '预售' ELSE '现售' END as sale_type, "
+        f"CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = housing_units.project_name AND u.status = '已转移登记') "
+        f"THEN '现售' ELSE '预售' END as sale_type, "
         f"(SELECT pass_date FROM presale_permits p WHERE p.project_name = housing_units.project_name LIMIT 1) as permit_date "
         f"FROM housing_units WHERE {where}"
     )
@@ -722,7 +722,7 @@ def api_stats():
             "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NOT NULL) as presale, "
             "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NULL) as spot_sale "
             f"FROM housing_units h "
-            "LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits) pp ON pp.project_name = h.project_name "
+            "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='已转移登记') pp ON pp.project_name = h.project_name "
             f"WHERE {base_where} {extra_cond}", p
         ).fetchone()
         return dict(row)
@@ -768,7 +768,7 @@ def api_overview():
         "SUM(CASE WHEN h.status='已备案' THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN h.status='已转移登记' THEN 1 ELSE 0 END) as total "
         "FROM housing_units h "
-        "LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits) pp ON pp.project_name = h.project_name "
+        "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='已转移登记') pp ON pp.project_name = h.project_name "
         f"LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits WHERE pass_date >= (CURRENT_DATE - INTERVAL '1 month')::text) ppr ON ppr.project_name = h.project_name "
         "WHERE h.house_usage='住宅'"
     ).fetchone()
@@ -781,7 +781,7 @@ def api_overview():
         "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_t, "
         "ROUND(AVG(h.unit_price)::numeric, 0) as avg_u "
         f"FROM housing_units h "
-        "LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits) pp ON pp.project_name = h.project_name "
+        "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='已转移登记') pp ON pp.project_name = h.project_name "
         f"WHERE h.house_usage='住宅' AND h.status='未售' AND h.zone != '' AND {UNSOLD_RECENCY} "
         "GROUP BY h.zone ORDER BY cnt DESC"
     ).fetchall()
