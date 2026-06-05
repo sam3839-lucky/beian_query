@@ -718,28 +718,26 @@ def api_stats():
         p = (extra_params or []) + params
         base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
         row = db.execute(
-            "SELECT COUNT(*) FILTER (WHERE h.status='未售') as unsold, "
-            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NULL) as presale, "
-            "COUNT(*) FILTER (WHERE h.status='未售' AND pp.project_name IS NOT NULL) as spot_sale "
+            "SELECT COUNT(*) as total, "
+            "COUNT(*) FILTER (WHERE h.status='未售') as unsold "
             f"FROM housing_units h "
-            "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='已转移登记') pp ON pp.project_name = h.project_name "
             f"WHERE {base_where} {extra_cond}", p
         ).fetchone()
         return dict(row)
 
     if zone and not project:
         d = _count_stats("AND h.zone=%s", [zone])
-        return jsonify({"unsold": d["unsold"], "presale": d["presale"], "spot_sale": d["spot_sale"], "sold_out": d["unsold"] <= 0})
+        return jsonify({"total": d["total"], "sold": d["total"] - d["unsold"], "unsold": d["unsold"], "sold_out": d["unsold"] <= 0})
 
     if not project:
-        return jsonify({"unsold": 0, "presale": 0, "spot_sale": 0, "sold_out": True})
+        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
 
     cond = "AND h.project_name=%s AND h.building_name=%s" if building else "AND h.project_name=%s"
     eparams = [project, building] if building else [project]
     d = _count_stats(cond, eparams)
     if d["unsold"] <= 0:
-        return jsonify({"unsold": 0, "presale": 0, "spot_sale": 0, "sold_out": True})
-    return jsonify({"unsold": d["unsold"], "presale": d["presale"], "spot_sale": d["spot_sale"]})
+        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
+    return jsonify({"total": d["total"], "sold": d["total"] - d["unsold"], "unsold": d["unsold"]})
 
 
 # ═══════════════════════════════════════════
