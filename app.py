@@ -841,7 +841,7 @@ def api_rankings():
 
     def run(order):
         return db.execute(
-            f"SELECT project_name, building_name, unit_no, built_area, unit_price, "
+            f"SELECT unit_api_id, project_name, building_name, unit_no, built_area, unit_price, "
             f"total_price, zone FROM housing_units {base} {order} LIMIT 10"
         ).fetchall()
 
@@ -852,6 +852,7 @@ def api_rankings():
 
     def fmt(row):
         return {
+            "unit_api_id": row["unit_api_id"],
             "project_name": row["project_name"] or "",
             "building_name": row["building_name"] or "",
             "unit_no": row["unit_no"] or "",
