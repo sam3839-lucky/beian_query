@@ -746,9 +746,9 @@ def api_stats():
 
 @app.route("/api/overview")
 def api_overview():
-    """首页总览：市场概况数据（5 分钟内存缓存）"""
+    """首页总览：市场概况数据（30 分钟内存缓存）"""
     import time
-    if hasattr(api_overview, "_cache") and (time.time() - api_overview._cache.get("ts", 0)) < 300:
+    if hasattr(api_overview, "_cache") and (time.time() - api_overview._cache.get("ts", 0)) < 1800:
         return jsonify(api_overview._cache["data"])
     db = get_db()
 
@@ -1131,7 +1131,13 @@ def api_transactions_recent():
 
 @app.route("/api/dashboard")
 def api_dashboard():
-    """成交仪表盘 — 一次请求替代 5 个独立调用"""
+    """成交仪表盘 — 一次请求替代 5 个独立调用（10 分钟内存缓存）"""
+    import time
+    months = request.args.get("months", 12, type=int)
+    cache_key = f"dashboard_{months}"
+    now = time.time()
+    if hasattr(api_dashboard, "_cache") and api_dashboard._cache.get("key") == cache_key and (now - api_dashboard._cache.get("ts", 0)) < 600:
+        return jsonify(api_dashboard._cache["data"])
     db = get_db()
     result = {}
 
@@ -1173,7 +1179,6 @@ def api_dashboard():
         result["districts"] = {"new": {"items": []}, "used": {"items": []}}
 
     # trends
-    months = request.args.get("months", 12, type=int)
     trows = db.execute(
         "SELECT TO_CHAR(report_date,'YYYY-MM') as m, "
         "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
@@ -1212,6 +1217,7 @@ def api_dashboard():
     result["salesRanks"] = [{"project_name": r["project_name"], "zone": r["zone"], "sold_count": r["sc"]} for r in srows]
     result["salesZones"] = [r["zone"] for r in zrows]
 
+    api_dashboard._cache = {"key": cache_key, "data": result, "ts": now}
     return jsonify(result)
 
 
