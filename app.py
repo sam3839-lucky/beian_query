@@ -27,12 +27,9 @@ def zone_name(name):
     """标准化区域名（深汕合作→深汕）"""
     return "深汕" if name == "深汕合作" else name
 
-# 未售房源新鲜度阈值：check_date 超过此天数的未售记录视为僵尸数据自动排除
-UNSOLD_STALE_DAYS = 1095  # 3 年
+# 未售房源新鲜度阈值：check_date 超过 5 年的未售记录视为僵尸数据自动排除
+UNSOLD_STALE_DAYS = 1825  # 5 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
-
-# 统计窗口：只统计 5 年内有未售活动的楼盘
-STATS_WINDOW = "check_date >= (CURRENT_DATE - INTERVAL '5 years')::text"
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
@@ -704,7 +701,7 @@ def api_stats():
     
     # 构建条件：仅当用户主动设置筛选时才加价格/面积条件
     # 5 年窗口：只统计近 5 年有房源活动的楼盘
-    conds = ["house_usage='住宅'", STATS_WINDOW]
+    conds = ["house_usage='住宅'", UNSOLD_RECENCY]
     params = []
     has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 9999)
     if has_filter:
@@ -730,7 +727,9 @@ def api_stats():
         return jsonify({"total": d["total"], "sold": d["total"] - d["unsold"], "unsold": d["unsold"], "sold_out": d["unsold"] <= 0})
 
     if not project:
-        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
+        # 全深圳：返回全市统计
+        d = _count_stats()
+        return jsonify({"total": d["total"], "sold": d["total"] - d["unsold"], "unsold": d["unsold"], "sold_out": d["unsold"] <= 0})
 
     cond = "AND h.project_name=%s AND h.building_name=%s" if building else "AND h.project_name=%s"
     eparams = [project, building] if building else [project]
