@@ -540,7 +540,7 @@ def api_zones():
     rows = db.execute(
         f"SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage='住宅' AND status='未售' AND {UNSOLD_RECENCY} ORDER BY zone"
     ).fetchall()
-    zones = [zone_name(r["zone"]) for r in rows]
+    zones = list(dict.fromkeys(zone_name(r["zone"]) for r in rows))
     zones.sort(key=pinyin_sort_key)
     return jsonify({"zones": zones})
 
