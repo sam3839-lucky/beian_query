@@ -808,12 +808,27 @@ def api_overview():
             if v == z:
                 sales_map[k] = max(r["daily_avg"] or 0, 0.01)
 
+    # 合并同名区域（如深汕合作→深汕）
+    merged = {}
+    for r in zone_rows:
+        name = zone_name(r["zone"])
+        if name not in merged:
+            merged[name] = {"count": 0, "presale": 0, "spot": 0, "total_t": 0.0, "total_u": 0.0, "n": 0}
+        m = merged[name]
+        m["count"] += r["cnt"]
+        m["presale"] += r["presale_cnt"]
+        m["spot"] += r["spot_cnt"]
+        m["total_t"] += float(r["avg_t"] or 0) * r["cnt"]
+        m["total_u"] += float(r["avg_u"] or 0) * r["cnt"]
+        m["n"] += r["cnt"]
     zones = [{
-        "name": zone_name(r["zone"]), "count": r["cnt"],
-        "presale": r["presale_cnt"], "spot_sale": r["spot_cnt"],
-        "avg_total": float(r["avg_t"] or 0), "avg_unit": float(r["avg_u"] or 0),
-        "inventory_months": round(r["cnt"] / sales_map.get(r["zone"], 0.01) / 30, 1),
-    } for r in zone_rows]
+        "name": name, "count": m["count"],
+        "presale": m["presale"], "spot_sale": m["spot"],
+        "avg_total": round(m["total_t"] / m["n"], 1) if m["n"] else 0,
+        "avg_unit": round(m["total_u"] / m["n"], 0) if m["n"] else 0,
+        "inventory_months": round(m["count"] / sales_map.get(name, 0.01) / 30, 1),
+    } for name, m in merged.items()]
+    zones.sort(key=lambda z: z["count"], reverse=True)
 
     data = {
         "total": row["total"],
