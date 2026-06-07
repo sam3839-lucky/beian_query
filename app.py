@@ -745,9 +745,9 @@ def api_stats():
 
 @app.route("/api/overview")
 def api_overview():
-    """首页总览：市场概况数据（12 小时内存缓存）"""
+    """首页总览：市场概况数据（6 小时内存缓存）"""
     import time
-    if hasattr(api_overview, "_cache") and (time.time() - api_overview._cache.get("ts", 0)) < 43200:
+    if hasattr(api_overview, "_cache") and (time.time() - api_overview._cache.get("ts", 0)) < 21600:
         return jsonify(api_overview._cache["data"])
     db = get_db()
 
