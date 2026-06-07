@@ -712,7 +712,7 @@ def api_stats():
     
     # 构建 COUNT SQL 的辅助函数
     def _count_stats(extra_cond="", extra_params=None):
-        p = (extra_params or []) + params
+        p = params + (extra_params or [])
         base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
         row = db.execute(
             "SELECT COUNT(*) as total, "
