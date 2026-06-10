@@ -613,10 +613,13 @@ def api_units():
     search = request.args.get("search", "")
 
     db = get_db()
-    conditions = ["project_name=%s", "house_usage='住宅'", "status IN ('期房待售','在建抵押','未售')",
-                  UNSOLD_RECENCY,
-                  "total_price BETWEEN %s AND %s", "built_area BETWEEN %s AND %s"]
-    params = [project, price_min, price_max, area_min, area_max]
+    conditions = ["project_name=%s", "house_usage='住宅'", f"status IN {UNSOLD_STATUSES}", UNSOLD_RECENCY]
+    params = [project]
+    has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 999999)
+    if has_filter:
+        conditions.append("total_price BETWEEN %s AND %s")
+        conditions.append("built_area BETWEEN %s AND %s")
+        params.extend([price_min, price_max, area_min, area_max])
 
     if building:
         conditions.append("building_name=%s")
