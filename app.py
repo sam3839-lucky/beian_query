@@ -1240,6 +1240,28 @@ def api_dashboard():
     return jsonify(result)
 
 
+@app.route("/api/daily-stats")
+def api_daily_stats():
+    """日成交查询（按日期范围），用于同比/环比计算"""
+    start = request.args.get("start", "")
+    end = request.args.get("end", "")
+    if not start or not end:
+        return jsonify({"items": []})
+
+    db = get_db()
+    rows = db.execute(
+        "SELECT TO_CHAR(report_date,'YYYY-MM-DD') as dt, "
+        "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as nc, "
+        "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as uc "
+        "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+        "AND report_date >= %s AND report_date <= %s "
+        "GROUP BY dt ORDER BY dt",
+        [start, end]
+    ).fetchall()
+    items = [{"date": r["dt"], "new": r["nc"] or 0, "used": r["uc"] or 0} for r in rows]
+    return jsonify({"items": items})
+
+
 # ═══════════════════════════════════════════
 # 运营后台 API
 # ═══════════════════════════════════════════
