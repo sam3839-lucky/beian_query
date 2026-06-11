@@ -30,7 +30,7 @@ def zone_name(name):
 # 未售房源新鲜度阈值：check_date 超过 5 年的未售记录视为僵尸数据自动排除
 UNSOLD_STALE_DAYS = 1825  # 5 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
-UNSOLD_STATUSES = "('未售','期房待售','在建抵押')"
+UNSOLD_STATUSES = "('未售','期房待售','在建抵押','首次登记')"
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
