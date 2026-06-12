@@ -1083,6 +1083,8 @@ def api_project_sales_rank():
         "new_status IN ('已网签','已备案','已转移登记')",
         "old_status IN ('期房待售','在建抵押','未售','首次登记')",
         f"changed_at >= NOW() - INTERVAL '{days} days'",
+        "project_name IS NOT NULL",
+        "zone IS NOT NULL",
     ]
     params = []
     if zone:
@@ -1108,6 +1110,7 @@ def api_project_sales_rank():
         "SELECT zone, COUNT(*) as cnt FROM unit_change_log "
         "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status IN ('期房待售','在建抵押','未售','首次登记') "
         f"AND changed_at >= NOW() - INTERVAL '{days} days' "
+        "AND zone IS NOT NULL "
         "GROUP BY zone ORDER BY cnt DESC LIMIT 6"
     ).fetchall()
     zones = [r["zone"] for r in zone_rows]
@@ -1225,12 +1228,14 @@ def api_dashboard():
         "SELECT project_name, zone, COUNT(*) as sc FROM unit_change_log "
         "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status IN ('期房待售','在建抵押','未售','首次登记') "
         f"AND changed_at >= NOW() - INTERVAL '{sdays} days' "
+        "AND project_name IS NOT NULL AND zone IS NOT NULL "
         "GROUP BY project_name, zone ORDER BY sc DESC LIMIT 10"
     ).fetchall()
     zrows = db.execute(
         "SELECT zone, COUNT(*) as cnt FROM unit_change_log "
         "WHERE new_status IN ('已网签','已备案','已转移登记') AND old_status IN ('期房待售','在建抵押','未售','首次登记') "
         f"AND changed_at >= NOW() - INTERVAL '{sdays} days' "
+        "AND zone IS NOT NULL "
         "GROUP BY zone ORDER BY cnt DESC LIMIT 6"
     ).fetchall()
     result["salesRanks"] = [{"project_name": r["project_name"], "zone": r["zone"], "sold_count": r["sc"]} for r in srows]
