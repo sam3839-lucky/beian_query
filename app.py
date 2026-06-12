@@ -738,9 +738,9 @@ def api_stats():
     cond = "AND h.project_name=%s AND h.building_name=%s" if building else "AND h.project_name=%s"
     eparams = [project, building] if building else [project]
     d = _count_stats(cond, eparams)
-    if d["unsold"] <= 0:
-        return jsonify({"total": 0, "sold": 0, "unsold": 0, "sold_out": True})
-    return jsonify({"total": d["total"], "sold": d["total"] - d["unsold"], "unsold": d["unsold"]})
+    sold = d["total"] - d["unsold"]
+    sold_out = d["unsold"] <= 0
+    return jsonify({"total": d["total"], "sold": sold, "unsold": d["unsold"], "sold_out": sold_out})
 
 
 # ═══════════════════════════════════════════
