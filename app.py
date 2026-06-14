@@ -774,6 +774,36 @@ def api_building_stats():
     return jsonify({"buildings": buildings})
 
 
+@app.route("/api/top-absorption")
+def api_top_absorption():
+    """去化率最高的项目 Top 5（住宅，近90天有成交）"""
+    db = get_db()
+    rows = db.execute(
+        "SELECT h.project_name, h.zone, COUNT(*) as total, "
+        "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')) as unsold, "
+        "MAX(hu.changed_at) as last_sold "
+        "FROM housing_units h "
+        "LEFT JOIN unit_change_log hu ON h.project_name = hu.project_name "
+        f"WHERE h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} "
+        "GROUP BY h.project_name, h.zone "
+        "HAVING COUNT(*) >= 20 "
+        "ORDER BY (COUNT(*) - COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')))::float / COUNT(*) DESC "
+        "LIMIT 5"
+    ).fetchall()
+    items = []
+    for r in rows:
+        total = r["total"]
+        unsold = r["unsold"] or 0
+        sold = total - unsold
+        pct = round(sold / total * 100, 1) if total > 0 else 0
+        items.append({
+            "project_name": r["project_name"],
+            "zone": r["zone"],
+            "total": total, "sold_count": sold, "unsold": unsold, "pct": pct
+        })
+    return jsonify({"items": items})
+
+
 # ═══════════════════════════════════════════
 # 首页 API
 # ═══════════════════════════════════════════
