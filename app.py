@@ -743,6 +743,37 @@ def api_stats():
     return jsonify({"total": d["total"], "sold": sold, "unsold": d["unsold"], "sold_out": sold_out})
 
 
+@app.route("/api/building-stats")
+def api_building_stats():
+    """楼栋去化统计：每栋楼的总套数、已售、可售"""
+    project = request.args.get("project", "")
+    if not project:
+        return jsonify({"buildings": []})
+    db = get_db()
+    rows = db.execute(
+        "SELECT building_name, COUNT(*) as total, "
+        "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')) as unsold "
+        "FROM housing_units "
+        "WHERE project_name=%s AND house_usage='住宅' AND building_name IS NOT NULL AND building_name!='' "
+        f"AND {UNSOLD_RECENCY} "
+        "GROUP BY building_name ORDER BY building_name",
+        [project]
+    ).fetchall()
+    buildings = []
+    for r in rows:
+        total = r["total"]
+        unsold = r["unsold"] or 0
+        sold = total - unsold
+        buildings.append({
+            "building": r["building_name"],
+            "total": total,
+            "sold": sold,
+            "unsold": unsold,
+            "pct": round(sold / total * 100, 1) if total > 0 else 0
+        })
+    return jsonify({"buildings": buildings})
+
+
 # ═══════════════════════════════════════════
 # 首页 API
 # ═══════════════════════════════════════════
