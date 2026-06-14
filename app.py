@@ -149,7 +149,8 @@ def api_quick_search():
             "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
             "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
             "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
-            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
+            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max, "
+            "CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = h.project_name AND u.status IN ('首次登记','已转移登记')) THEN '现售' ELSE '预售' END as sale_type "
             "FROM housing_units h "
             "WHERE h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
             f"AND {UNSOLD_RECENCY} "
@@ -167,7 +168,8 @@ def api_quick_search():
             "ROUND((AVG(h.total_price)/10000)::numeric, 1) as avg_total, "
             "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
             "ROUND((MIN(h.total_price)/10000)::numeric, 1) as price_min, "
-            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max "
+            "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max, "
+            "CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = h.project_name AND u.status IN ('首次登记','已转移登记')) THEN '现售' ELSE '预售' END as sale_type "
             "FROM housing_units h "
             "WHERE h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
             f"AND {UNSOLD_RECENCY} "
@@ -203,6 +205,7 @@ def api_quick_search():
             "price_max": float(r["price_max"] or 0),
             "developer": r["developer"] or "",
             "match_type": match_type,
+            "sale_type": r["sale_type"] or "预售",
         })
 
     return jsonify({"results": results})
