@@ -14,7 +14,7 @@ from pypinyin import pinyin, Style
 import poster
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "beian-dev-secret-change-in-production")
+app.secret_key = os.environ.get("SECRET_KEY") or __import__('secrets').token_hex(32)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "property_clawer"),
