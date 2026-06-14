@@ -804,6 +804,87 @@ def api_top_absorption():
     return jsonify({"items": items})
 
 
+@app.route("/api/upcoming")
+def api_upcoming():
+    """即将入市项目：最近取证的预售项目（住宅，有可售房源）"""
+    db = get_db()
+    zone = request.args.get("zone", "").strip()
+    cond = "AND h.zone=%s" if zone else ""
+    params = [zone] if zone else []
+    rows = db.execute(
+        "SELECT DISTINCT ON (h.project_name) h.project_name, h.zone, pp.developer, pp.pass_date, "
+        "COUNT(*) as total, "
+        "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')) as unsold, "
+        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit "
+        "FROM housing_units h "
+        "LEFT JOIN presale_permits pp ON h.project_name = pp.project_name "
+        f"WHERE h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} {cond} "
+        "GROUP BY h.project_name, h.zone, pp.developer, pp.pass_date "
+        "ORDER BY h.project_name, pp.pass_date DESC NULLS LAST "
+        "LIMIT 30",
+        params
+    ).fetchall()
+    items = []
+    for r in rows:
+        items.append({
+            "project_name": r["project_name"],
+            "zone": r["zone"],
+            "developer": r["developer"] or "",
+            "pass_date": str(r["pass_date"]) if r["pass_date"] else "",
+            "total": r["total"], "unsold": r["unsold"] or 0,
+            "avg_unit": r["avg_unit"] or 0
+        })
+    # 按取证日期倒序
+    items.sort(key=lambda x: x["pass_date"], reverse=True)
+    return jsonify({"items": items})
+
+
+@app.route("/api/zone-compare")
+def api_zone_compare():
+    """同板块对比：指定项目所在区域的同类项目对比"""
+    project = request.args.get("project", "").strip()
+    if not project:
+        return jsonify({"items": [], "zone": ""})
+    db = get_db()
+    # 先获取项目的zone
+    row = db.execute(
+        "SELECT zone FROM housing_units WHERE project_name=%s AND zone IS NOT NULL LIMIT 1",
+        [project]
+    ).fetchone()
+    if not row:
+        return jsonify({"items": [], "zone": ""})
+    zone = row["zone"]
+    rows = db.execute(
+        "SELECT h.project_name, h.zone, "
+        "COUNT(*) as total, "
+        "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')) as unsold, "
+        "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit, "
+        "MIN(h.total_price) as price_min, MAX(h.total_price) as price_max, "
+        "MIN(h.built_area) as area_min, MAX(h.built_area) as area_max, "
+        "MAX(pp.pass_date) as pass_date "
+        "FROM housing_units h "
+        "LEFT JOIN presale_permits pp ON h.project_name = pp.project_name "
+        f"WHERE h.zone=%s AND h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} "
+        "GROUP BY h.project_name, h.zone "
+        "ORDER BY MAX(pp.pass_date) DESC NULLS LAST LIMIT 5",
+        [zone]
+    ).fetchall()
+    items = []
+    for r in rows:
+        total = r["total"]; unsold = r["unsold"] or 0; sold = total - unsold
+        items.append({
+            "project_name": r["project_name"],
+            "zone": r["zone"],
+            "total": total, "sold": sold, "unsold": unsold,
+            "pct": round(sold/total*100,1) if total else 0,
+            "avg_unit": r["avg_unit"] or 0,
+            "price_min": r["price_min"] or 0, "price_max": r["price_max"] or 0,
+            "area_min": r["area_min"] or 0, "area_max": r["area_max"] or 0,
+            "pass_date": str(r["pass_date"]) if r["pass_date"] else ""
+        })
+    return jsonify({"items": items, "zone": zone})
+
+
 # ═══════════════════════════════════════════
 # 首页 API
 # ═══════════════════════════════════════════
