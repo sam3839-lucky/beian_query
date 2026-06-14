@@ -30,7 +30,8 @@ def zone_name(name):
 # 未售房源新鲜度阈值：check_date 超过 5 年的未售记录视为僵尸数据自动排除
 UNSOLD_STALE_DAYS = 1825  # 5 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
-UNSOLD_STATUSES = "('未售','期房待售','在建抵押','首次登记')"
+UNSOLD_STATUSES = "('未售','期房待售','在建抵押','首次登记','锁定','抵押','查封','安居房','共有产权')"
+SOLD_STATUSES = "('已签认购书','已签合同','已录入合同','已备案','已网签','已转移登记')"
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
@@ -631,12 +632,13 @@ def api_units():
 
     where = " AND ".join(conditions)
     sql = (
-        f"SELECT unit_no, built_area, unit_price, total_price, "
+        f"SELECT unit_no, built_area, inner_area, share_area, inner_unit_price, "
+        f"unit_price, total_price, "
         f"house_usage, status, check_date, building_name, "
         f"CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = housing_units.project_name AND u.status IN ('首次登记','已转移登记')) "
         f"THEN '现售' ELSE '预售' END as sale_type, "
         f"(SELECT pass_date FROM presale_permits p WHERE p.project_name = housing_units.project_name LIMIT 1) as permit_date "
-        f"FROM housing_units WHERE {where}"
+        f"FROM housing_units WHERE {where} ORDER BY building_name, unit_no LIMIT 500"
     )
     rows = db.execute(sql, params).fetchall()
 
@@ -668,6 +670,9 @@ def api_units():
         units.append({
             "unit_no": unit_no,
             "built_area": r["built_area"],
+            "inner_area": r["inner_area"],
+            "share_area": r["share_area"],
+            "inner_unit_price": r["inner_unit_price"],
             "unit_price": r["unit_price"],
             "total_price": total_wan,
             "house_usage": r["house_usage"],
@@ -986,6 +991,8 @@ def api_overview():
         "avg_unit": float(row["avg_unit"] or 0),
         "avg_unit_price": float(row["avg_unit_price"] or 0),
         "recent": row["recent"],
+        "permit_total": db.execute("SELECT COUNT(*) as cnt FROM presale_permits").fetchone()["cnt"],
+        "today_new": db.execute("SELECT COUNT(*) as cnt FROM presale_permits WHERE pass_date = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')").fetchone()["cnt"],
         "zones": zones,
     }
     api_overview._cache = {"data": data, "ts": time.time()}
@@ -1704,6 +1711,138 @@ def api_project_history_detail():
 
     return jsonify({"detail": detail, "recent": recent})
 
+
+# ── v3 新增端点 ──
+
+@app.route("/api/project-absorption")
+def api_project_absorption():
+    """所有项目的去化率列表（用于找房卡片、行情排行）"""
+    zone = request.args.get("zone", "")
+    db = get_db()
+    cond = "AND h.zone = %s" if zone else ""
+    params = [zone] if zone else []
+    rows = db.execute(f"""
+        SELECT h.project_name, h.zone, COUNT(*) as total,
+            SUM(CASE WHEN h.status IN {SOLD_STATUSES} THEN 1 ELSE 0 END) as sold,
+            ROUND(MIN(h.unit_price)::numeric, 0) as price_min,
+            ROUND(MAX(h.unit_price)::numeric, 0) as price_max,
+            ROUND((MIN(h.total_price)/10000)::numeric, 1) as total_min,
+            ROUND((MAX(h.total_price)/10000)::numeric, 1) as total_max,
+            ROUND(MIN(h.built_area)::numeric, 1) as area_min,
+            ROUND(MAX(h.built_area)::numeric, 1) as area_max,
+            MAX(p.pass_date) as permit_date
+        FROM housing_units h
+        LEFT JOIN presale_permits p ON p.project_name = h.project_name
+        WHERE h.house_usage = '住宅' AND {UNSOLD_RECENCY} {cond}
+        GROUP BY h.project_name, h.zone
+        ORDER BY permit_date DESC NULLS LAST, total DESC
+    """, params).fetchall()
+    return jsonify([{
+        "project_name": r["project_name"], "zone": r["zone"],
+        "total": r["total"], "sold": r["sold"],
+        "absorption_pct": round(r["sold"]*100.0/r["total"], 2) if r["total"] > 0 else 0,
+        "price_min": float(r["price_min"] or 0), "price_max": float(r["price_max"] or 0),
+        "total_min": float(r["total_min"] or 0), "total_max": float(r["total_max"] or 0),
+        "area_min": float(r["area_min"] or 0), "area_max": float(r["area_max"] or 0),
+        "permit_date": r["permit_date"] or "",
+    } for r in rows])
+
+@app.route("/api/building-absorption")
+def api_building_absorption():
+    """某项目各楼栋的去化率（用于楼盘详情-楼栋去化 tab）"""
+    permit_no = request.args.get("permit_no", "")
+    project = request.args.get("project", "")
+    if not permit_no and not project:
+        return jsonify({"error": "需要 permit_no 或 project 参数"}), 400
+    db = get_db()
+    cond = "h.permit_no = %s" if permit_no else "h.project_name = %s"
+    param = permit_no if permit_no else project
+    rows = db.execute(f"""
+        SELECT h.building_name,
+            COUNT(*) as total,
+            SUM(CASE WHEN h.status IN {SOLD_STATUSES} THEN 1 ELSE 0 END) as sold
+        FROM housing_units h
+        WHERE {cond}
+        GROUP BY h.building_name
+        ORDER BY h.building_name
+    """, [param]).fetchall()
+    return jsonify([{
+        "building_name": r["building_name"],
+        "total": r["total"], "sold": r["sold"],
+        "absorption_pct": round(r["sold"]*100.0/r["total"], 2) if r["total"] > 0 else 0,
+    } for r in rows])
+
+@app.route("/api/project-stats")
+def api_project_stats():
+    """项目级统计数据（用于楼盘详情 6 格面板）"""
+    permit_no = request.args.get("permit_no", "")
+    project = request.args.get("project", "")
+    if not permit_no and not project:
+        return jsonify({"error": "需要 permit_no 或 project 参数"}), 400
+    db = get_db()
+    cond = "p.permit_no = %s" if permit_no else "(p.project_name = %s OR p.project_name_norm = %s)"
+    param = permit_no if permit_no else project
+    params = [param] if permit_no else [project, project]
+    row = db.execute(f"""
+        SELECT p.project_name, p.zone, p.developer, p.pass_date,
+            p.property_management, p.property_fee, p.plot_ratio,
+            p.land_area, p.total_building_area, p.land_use_years,
+            p.presale_total_units, p.house_use_type, p.developer_phone,
+            p.site_address, p.approving_authority
+        FROM presale_permits p WHERE {cond} LIMIT 1
+    """, params).fetchone()
+    if not row:
+        return jsonify({"error": "未找到项目"}), 404
+    # 补充 housing_units 统计
+    stats_cond = "permit_no = %s" if permit_no else "project_name = %s"
+    stats = db.execute(f"""
+        SELECT COUNT(*) as total_units,
+            SUM(CASE WHEN status IN {UNSOLD_STATUSES} THEN 1 ELSE 0 END) as unsold,
+            ROUND(AVG(unit_price)::numeric, 0) as avg_unit_price
+        FROM housing_units
+        WHERE house_usage = '住宅' AND {stats_cond}
+    """, [param]).fetchone()
+    return jsonify({
+        "project_name": row["project_name"], "zone": row["zone"],
+        "developer": row["developer"], "pass_date": row["pass_date"] or "",
+        "property_management": row["property_management"] or "",
+        "property_fee": row["property_fee"] or "",
+        "plot_ratio": float(row["plot_ratio"] or 0),
+        "land_area": float(row["land_area"] or 0),
+        "total_building_area": float(row["total_building_area"] or 0),
+        "land_use_years": row["land_use_years"] or "",
+        "presale_total_units": row["presale_total_units"] or 0,
+        "house_use_type": row["house_use_type"] or "",
+        "developer_phone": row["developer_phone"] or "",
+        "site_address": row["site_address"] or "",
+        "approving_authority": row["approving_authority"] or "",
+        "total_units": stats["total_units"] if stats else 0,
+        "unsold": stats["unsold"] if stats else 0,
+        "avg_unit_price": float(stats["avg_unit_price"] or 0) if stats else 0,
+    })
+
+@app.route("/api/zone-projects")
+def api_zone_projects():
+    """同区近期预售证列表（用于同板块对比）"""
+    zone = request.args.get("zone", "")
+    if not zone:
+        return jsonify({"error": "需要 zone 参数"}), 400
+    db = get_db()
+    rows = db.execute("""
+        SELECT p.project_name, p.zone, p.developer, p.pass_date,
+            p.property_management, p.plot_ratio,
+            COALESCE(p.presale_total_units, 0) as presale_total_units
+        FROM presale_permits p
+        WHERE p.zone = %s AND TO_DATE(p.pass_date, 'YYYY-MM-DD') >= CURRENT_DATE - INTERVAL '6 months'
+        ORDER BY p.pass_date DESC LIMIT 20
+    """, [zone]).fetchall()
+    return jsonify([{
+        "project_name": r["project_name"], "zone": r["zone"],
+        "developer": r["developer"], "pass_date": r["pass_date"] or "",
+        "property_management": r["property_management"] or "",
+        "plot_ratio": float(r["plot_ratio"] or 0),
+        "presale_total_units": r["presale_total_units"],
+    } for r in rows])
 
 if __name__ == "__main__":
     print("🏠 备案价查询 API 服务启动")
