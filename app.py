@@ -998,16 +998,18 @@ def api_rankings():
     db = get_db()
     base = f"WHERE house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND project_name IS NOT NULL AND project_name != '' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
-    def run(order):
-        return db.execute(
-            f"SELECT unit_api_id, project_name, building_name, unit_no, built_area, unit_price, "
-            f"total_price, zone FROM housing_units {base} {order} LIMIT 10"
-        ).fetchall()
-
-    cheap_total  = run("ORDER BY total_price ASC")
-    dear_total   = run("ORDER BY total_price DESC")
-    cheap_unit   = run("ORDER BY unit_price ASC")
-    dear_unit    = run("ORDER BY unit_price DESC")
+    tab = request.args.get("tab", "cheap_total")
+    order_map = {
+        "cheap_total": "ORDER BY total_price ASC",
+        "dear_total":  "ORDER BY total_price DESC",
+        "cheap_unit":  "ORDER BY unit_price ASC",
+        "dear_unit":   "ORDER BY unit_price DESC",
+    }
+    order = order_map.get(tab, order_map["cheap_total"])
+    rows = db.execute(
+        f"SELECT unit_api_id, project_name, building_name, unit_no, built_area, unit_price, "
+        f"total_price, zone FROM housing_units {base} {order} LIMIT 10"
+    ).fetchall()
 
     def fmt(row):
         return {
@@ -1022,10 +1024,8 @@ def api_rankings():
         }
 
     return jsonify({
-        "cheap_total": [fmt(r) for r in cheap_total],
-        "dear_total":  [fmt(r) for r in dear_total],
-        "cheap_unit":  [fmt(r) for r in cheap_unit],
-        "dear_unit":   [fmt(r) for r in dear_unit],
+        "tab": tab,
+        "items": [fmt(r) for r in rows],
     })
 
 
