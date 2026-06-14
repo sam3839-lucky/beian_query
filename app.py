@@ -779,15 +779,13 @@ def api_top_absorption():
     """去化率最高的项目 Top 5（住宅，近90天有成交）"""
     db = get_db()
     rows = db.execute(
-        "SELECT h.project_name, h.zone, COUNT(*) as total, "
-        "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')) as unsold, "
-        "MAX(hu.changed_at) as last_sold "
-        "FROM housing_units h "
-        "LEFT JOIN unit_change_log hu ON h.project_name = hu.project_name "
-        f"WHERE h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} "
-        "GROUP BY h.project_name, h.zone "
+        "SELECT project_name, zone, COUNT(*) as total, "
+        "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')) as unsold "
+        "FROM housing_units "
+        f"WHERE house_usage='住宅' AND project_name IS NOT NULL AND project_name!='' AND {UNSOLD_RECENCY} "
+        "GROUP BY project_name, zone "
         "HAVING COUNT(*) >= 20 "
-        "ORDER BY (COUNT(*) - COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售')))::float / COUNT(*) DESC "
+        "ORDER BY (COUNT(*) - COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')))::float / COUNT(*) DESC "
         "LIMIT 5"
     ).fetchall()
     items = []
