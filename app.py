@@ -928,7 +928,10 @@ def api_price_volume():
 
     # 1. 价格指数
     p_rows = db.execute(
-        "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base "
+        "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base, "
+        "new_90_mom, new_90_yoy, new_90_base, "
+        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
+        "new_144_mom, new_144_yoy, new_144_base "
         "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
         [city, months]
     ).fetchall()
@@ -958,6 +961,9 @@ def api_price_volume():
             "month": m,
             "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
             "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
+            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
+            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
+            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
         }
         if m in vol_items:
             item["volume"] = vol_items[m]
