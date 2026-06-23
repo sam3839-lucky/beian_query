@@ -893,29 +893,34 @@ def api_zone_compare():
 
 @app.route("/api/price-index")
 def api_price_index():
-    """70城房价指数：指定城市近N个月数据"""
+    """70城房价指数：指定城市近N个月数据（源表 nbs_70city_price_index）"""
     city = request.args.get("city", "深圳")
     months = request.args.get("months", 12, type=int)
     db = get_db()
     rows = db.execute(
-        "SELECT month, new_mom, new_yoy, new_base, used_mom, used_yoy, used_base, "
-        "new_90_mom, new_90_yoy, new_90_base, "
-        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
-        "new_144_mom, new_144_yoy, new_144_base "
-        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
+        "SELECT report_date, property_type, area_range, mom, yoy "
+        "FROM nbs_70city_price_index WHERE city=%s "
+        "AND area_range='all' "
+        "ORDER BY report_date DESC LIMIT %s",
         [city, months]
     ).fetchall()
     def f(v):
         return round(float(v), 1) if v is not None else None
+    # 按月份聚合
+    by_month = {}
+    for r in rows:
+        m = str(r["report_date"])[:7]
+        if m not in by_month:
+            by_month[m] = {}
+        pt = "new" if r["property_type"] == "new" else "used"
+        by_month[m][pt] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
     items = []
-    for r in reversed(rows):
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
         items.append({
-            "month": r["month"],
-            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
-            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
-            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
-            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
-            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
+            "month": m,
+            "new": d.get("new", {}),
+            "used": d.get("used", {}),
         })
     return jsonify({"city": city, "items": items})
 
@@ -926,18 +931,27 @@ def api_price_volume():
     months = request.args.get("months", 54, type=int)
     db = get_db()
 
-    # 1. 价格指数
+    # 1. 价格指数（从 nbs_70city_price_index）
     p_rows = db.execute(
-        "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base, "
-        "new_90_mom, new_90_yoy, new_90_base, "
-        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
-        "new_144_mom, new_144_yoy, new_144_base "
-        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
+        "SELECT report_date, property_type, area_range, mom, yoy "
+        "FROM nbs_70city_price_index WHERE city=%s AND area_range='all' "
+        "ORDER BY report_date DESC LIMIT %s",
         [city, months]
     ).fetchall()
-    p_rows = list(reversed(p_rows))  # 转为升序
 
-    # 2. 成交量（仅深圳，从 transaction_data 按月汇总）
+    def f(v):
+        return round(float(v), 1) if v is not None else None
+
+    # 按月聚合
+    by_month = {}
+    for r in p_rows:
+        m = str(r["report_date"])[:7]
+        if m not in by_month:
+            by_month[m] = {}
+        pt = "new" if r["property_type"] == "new" else "used"
+        by_month[m][pt] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+
+    # 2. 成交量（仅深圳）
     vol_items = {}
     if city == "深圳":
         v_rows = db.execute(
@@ -951,20 +965,10 @@ def api_price_volume():
         for r in v_rows:
             vol_items[r["ym"]] = {"new": int(r["new_vol"] or 0), "used": int(r["used_vol"] or 0)}
 
-    def f(v):
-        return round(float(v), 1) if v is not None else None
-
     items = []
-    for r in p_rows:
-        m = r["month"]
-        item = {
-            "month": m,
-            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
-            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
-            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
-            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
-            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
-        }
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
+        item = {"month": m, "new": d.get("new", {}), "used": d.get("used", {})}
         if m in vol_items:
             item["volume"] = vol_items[m]
         items.append(item)
