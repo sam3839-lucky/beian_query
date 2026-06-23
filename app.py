@@ -898,11 +898,15 @@ def api_price_index():
     months = request.args.get("months", 12, type=int)
     db = get_db()
     rows = db.execute(
-        "SELECT report_date, property_type, area_range, mom, yoy "
+        "SELECT report_date, property_type, mom, yoy "
         "FROM nbs_70city_price_index WHERE city=%s "
         "AND area_range='all' "
-        "ORDER BY report_date DESC LIMIT %s",
-        [city, months]
+        "AND report_date IN ("
+        "  SELECT DISTINCT report_date FROM nbs_70city_price_index "
+        "  WHERE city=%s AND area_range='all' "
+        "  ORDER BY report_date DESC LIMIT %s"
+        ") ORDER BY report_date",
+        [city, city, months]
     ).fetchall()
     def f(v):
         return round(float(v), 1) if v is not None else None
@@ -933,10 +937,14 @@ def api_price_volume():
 
     # 1. 价格指数（从 nbs_70city_price_index）
     p_rows = db.execute(
-        "SELECT report_date, property_type, area_range, mom, yoy "
+        "SELECT report_date, property_type, mom, yoy "
         "FROM nbs_70city_price_index WHERE city=%s AND area_range='all' "
-        "ORDER BY report_date DESC LIMIT %s",
-        [city, months]
+        "AND report_date IN ("
+        "  SELECT DISTINCT report_date FROM nbs_70city_price_index "
+        "  WHERE city=%s AND area_range='all' "
+        "  ORDER BY report_date DESC LIMIT %s"
+        ") ORDER BY report_date",
+        [city, city, months]
     ).fetchall()
 
     def f(v):
