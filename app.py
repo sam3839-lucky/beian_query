@@ -929,9 +929,10 @@ def api_price_volume():
     # 1. 价格指数
     p_rows = db.execute(
         "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base "
-        "FROM city_price_index WHERE city=%s ORDER BY month ASC LIMIT %s",
+        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
         [city, months]
     ).fetchall()
+    p_rows = list(reversed(p_rows))  # 转为升序
 
     # 2. 成交量（仅深圳，从 transaction_data 按月汇总）
     vol_items = {}
