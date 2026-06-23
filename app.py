@@ -891,6 +891,34 @@ def api_zone_compare():
     return jsonify({"items": items, "zone": zone})
 
 
+@app.route("/api/price-index")
+def api_price_index():
+    """70城房价指数：指定城市近N个月数据"""
+    city = request.args.get("city", "深圳")
+    months = request.args.get("months", 12, type=int)
+    db = get_db()
+    rows = db.execute(
+        "SELECT month, new_mom, new_yoy, new_base, used_mom, used_yoy, used_base, "
+        "new_90_mom, new_90_yoy, new_90_base, "
+        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
+        "new_144_mom, new_144_yoy, new_144_base "
+        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
+        [city, months]
+    ).fetchall()
+    def f(v):
+        return round(float(v), 1) if v is not None else None
+    items = []
+    for r in reversed(rows):
+        items.append({
+            "month": r["month"],
+            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
+            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
+            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
+            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
+            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
+        })
+    return jsonify({"city": city, "items": items})
+
 # ═══════════════════════════════════════════
 # 首页 API
 # ═══════════════════════════════════════════
