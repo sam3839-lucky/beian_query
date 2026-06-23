@@ -893,29 +893,43 @@ def api_zone_compare():
 
 @app.route("/api/price-index")
 def api_price_index():
-    """70城房价指数：指定城市近N个月数据（源表 city_price_index，含面积段）"""
+    """70城房价指数：指定城市近N个月（源表 nbs_70city_price_index）"""
     city = request.args.get("city", "深圳")
     months = request.args.get("months", 12, type=int)
     db = get_db()
     rows = db.execute(
-        "SELECT month, new_mom, new_yoy, new_base, used_mom, used_yoy, used_base, "
-        "new_90_mom, new_90_yoy, new_90_base, "
-        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
-        "new_144_mom, new_144_yoy, new_144_base "
-        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
-        [city, months]
+        "SELECT TO_CHAR(report_date,'YYYY-MM') as m, property_type, area_range, mom, yoy "
+        "FROM nbs_70city_price_index WHERE city=%s "
+        "AND report_date IN ("
+        "  SELECT DISTINCT report_date FROM nbs_70city_price_index "
+        "  WHERE city=%s ORDER BY report_date DESC LIMIT %s"
+        ") ORDER BY m, property_type, area_range",
+        [city, city, months]
     ).fetchall()
     def f(v):
         return round(float(v), 1) if v is not None else None
+    by_month = {}
+    for r in rows:
+        m = r["m"]
+        if m not in by_month:
+            by_month[m] = {}
+        key = "new" if r["property_type"] == "new" else "used"
+        ar = r["area_range"]
+        if ar == "all":
+            by_month[m][key] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "90㎡以下":
+            by_month[m]["new_90"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "90-144㎡":
+            by_month[m]["new_90_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "144㎡以上":
+            by_month[m]["new_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
     items = []
-    for r in reversed(rows):
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
         items.append({
-            "month": r["month"],
-            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
-            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
-            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
-            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
-            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
+            "month": m,
+            "new": d.get("new", {}), "used": d.get("used", {}),
+            "new_90": d.get("new_90", {}), "new_90_144": d.get("new_90_144", {}), "new_144": d.get("new_144", {}),
         })
     return jsonify({"city": city, "items": items})
 
@@ -926,19 +940,35 @@ def api_price_volume():
     months = request.args.get("months", 54, type=int)
     db = get_db()
 
-    # 1. 价格指数（从 city_price_index，含面积段）
+    # 1. 价格指数（从 nbs_70city_price_index）
     p_rows = db.execute(
-        "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base, "
-        "new_90_mom, new_90_yoy, new_90_base, "
-        "new_90_144_mom, new_90_144_yoy, new_90_144_base, "
-        "new_144_mom, new_144_yoy, new_144_base "
-        "FROM city_price_index WHERE city=%s ORDER BY month DESC LIMIT %s",
-        [city, months]
+        "SELECT TO_CHAR(report_date,'YYYY-MM') as m, property_type, area_range, mom, yoy "
+        "FROM nbs_70city_price_index WHERE city=%s "
+        "AND report_date IN ("
+        "  SELECT DISTINCT report_date FROM nbs_70city_price_index "
+        "  WHERE city=%s ORDER BY report_date DESC LIMIT %s"
+        ") ORDER BY m, property_type, area_range",
+        [city, city, months]
     ).fetchall()
-    p_rows = list(reversed(p_rows))
 
     def f(v):
         return round(float(v), 1) if v is not None else None
+
+    by_month = {}
+    for r in p_rows:
+        m = r["m"]
+        if m not in by_month:
+            by_month[m] = {}
+        key = "new" if r["property_type"] == "new" else "used"
+        ar = r["area_range"]
+        if ar == "all":
+            by_month[m][key] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "90㎡以下":
+            by_month[m]["new_90"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "90-144㎡":
+            by_month[m]["new_90_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
+        elif ar == "144㎡以上":
+            by_month[m]["new_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
 
     # 2. 成交量（仅深圳）
     vol_items = {}
@@ -955,15 +985,12 @@ def api_price_volume():
             vol_items[r["ym"]] = {"new": int(r["new_vol"] or 0), "used": int(r["used_vol"] or 0)}
 
     items = []
-    for r in p_rows:
-        m = r["month"]
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
         item = {
             "month": m,
-            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
-            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
-            "new_90": {"mom": f(r["new_90_mom"]), "yoy": f(r["new_90_yoy"]), "base": f(r["new_90_base"])},
-            "new_90_144": {"mom": f(r["new_90_144_mom"]), "yoy": f(r["new_90_144_yoy"]), "base": f(r["new_90_144_base"])},
-            "new_144": {"mom": f(r["new_144_mom"]), "yoy": f(r["new_144_yoy"]), "base": f(r["new_144_base"])},
+            "new": d.get("new", {}), "used": d.get("used", {}),
+            "new_90": d.get("new_90", {}), "new_90_144": d.get("new_90_144", {}), "new_144": d.get("new_144", {}),
         }
         if m in vol_items:
             item["volume"] = vol_items[m]
