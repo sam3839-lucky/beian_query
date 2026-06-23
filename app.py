@@ -937,13 +937,12 @@ def api_price_volume():
     vol_items = {}
     if city == "深圳":
         v_rows = db.execute(
-            "SELECT TO_CHAR(report_date,'YYYY-MM') as ym, "
+            f"SELECT TO_CHAR(report_date,'YYYY-MM') as ym, "
             "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_vol, "
             "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_vol "
-            "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
-            "AND report_date >= (CURRENT_DATE - INTERVAL '%s months')::date "
-            "GROUP BY ym ORDER BY ym",
-            [months]
+            f"FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+            f"AND report_date >= (CURRENT_DATE - INTERVAL '{months} months')::date "
+            "GROUP BY ym ORDER BY ym"
         ).fetchall()
         for r in v_rows:
             vol_items[r["ym"]] = {"new": int(r["new_vol"] or 0), "used": int(r["used_vol"] or 0)}
