@@ -919,6 +919,53 @@ def api_price_index():
         })
     return jsonify({"city": city, "items": items})
 
+@app.route("/api/price-volume")
+def api_price_volume():
+    """房价指数 + 月成交量（用于量价关系图）"""
+    city = request.args.get("city", "深圳")
+    months = request.args.get("months", 54, type=int)
+    db = get_db()
+
+    # 1. 价格指数
+    p_rows = db.execute(
+        "SELECT month, new_mom, new_yoy, used_mom, used_yoy, new_base, used_base "
+        "FROM city_price_index WHERE city=%s ORDER BY month ASC LIMIT %s",
+        [city, months]
+    ).fetchall()
+
+    # 2. 成交量（仅深圳，从 transaction_data 按月汇总）
+    vol_items = {}
+    if city == "深圳":
+        v_rows = db.execute(
+            "SELECT TO_CHAR(report_date,'YYYY-MM') as ym, "
+            "SUM(CASE WHEN property_type_id=1 THEN deal_count ELSE 0 END) as new_vol, "
+            "SUM(CASE WHEN property_type_id=2 THEN deal_count ELSE 0 END) as used_vol "
+            "FROM transaction_data WHERE city_id=1 AND district_id!=5999 "
+            "AND report_date >= (CURRENT_DATE - INTERVAL '%s months')::date "
+            "GROUP BY ym ORDER BY ym",
+            [months]
+        ).fetchall()
+        for r in v_rows:
+            vol_items[r["ym"]] = {"new": int(r["new_vol"] or 0), "used": int(r["used_vol"] or 0)}
+
+    def f(v):
+        return round(float(v), 1) if v is not None else None
+
+    items = []
+    for r in p_rows:
+        m = r["month"]
+        item = {
+            "month": m,
+            "new": {"mom": f(r["new_mom"]), "yoy": f(r["new_yoy"]), "base": f(r["new_base"])},
+            "used": {"mom": f(r["used_mom"]), "yoy": f(r["used_yoy"]), "base": f(r["used_base"])},
+        }
+        if m in vol_items:
+            item["volume"] = vol_items[m]
+        items.append(item)
+
+    return jsonify({"city": city, "items": items, "has_volume": city == "深圳"})
+
+
 # ═══════════════════════════════════════════
 # 首页 API
 # ═══════════════════════════════════════════
