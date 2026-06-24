@@ -917,11 +917,11 @@ def api_price_index():
         ar = r["area_range"]
         if ar == "all":
             by_month[m][key] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "90㎡以下":
+        elif ar in ("90㎡以下", "90_below"):
             by_month[m]["new_90"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "90-144㎡":
+        elif ar in ("90-144㎡", "90_144"):
             by_month[m]["new_90_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "144㎡以上":
+        elif ar in ("144㎡以上", "144_above"):
             by_month[m]["new_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
     items = []
     for m in sorted(by_month.keys()):
@@ -963,11 +963,11 @@ def api_price_volume():
         ar = r["area_range"]
         if ar == "all":
             by_month[m][key] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "90㎡以下":
+        elif ar in ("90㎡以下", "90_below"):
             by_month[m]["new_90"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "90-144㎡":
+        elif ar in ("90-144㎡", "90_144"):
             by_month[m]["new_90_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
-        elif ar == "144㎡以上":
+        elif ar in ("144㎡以上", "144_above"):
             by_month[m]["new_144"] = {"mom": f(r["mom"]), "yoy": f(r["yoy"])}
 
     # 2. 成交量（仅深圳）
