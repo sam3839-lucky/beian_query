@@ -32,6 +32,8 @@ UNSOLD_STALE_DAYS = 1825  # 5 年
 UNSOLD_RECENCY = f"check_date >= (CURRENT_DATE - INTERVAL '{UNSOLD_STALE_DAYS} days')::text"
 UNSOLD_STATUSES = "('未售','期房待售','在建抵押','首次登记','锁定','抵押','查封','安居房','共有产权')"
 SOLD_STATUSES = "('已签认购书','已签合同','已录入合同','已备案','已网签','已转移登记')"
+# 找房纳入的房源类型：住宅 + 所有公寓/宿舍类
+RESIDENTIAL_TYPES = "('住宅','商务公寓','宿舍','单身公寓','公寓','单身宿舍','工业配套宿舍','专家公寓','产业配套宿舍','配套宿舍','工业配套单身宿舍','产业配套单身宿舍','度假公寓','商务公寓、酒店','公寓式办公','商务公寓（会客室）','配套单身宿舍','宿舍活动用房','食堂、宿舍、办公','商业、研发用房、宿舍')"
 
 # ── 微信小程序配置（部署时改） ──
 WECHAT_APPID = os.environ.get("WECHAT_APPID", "")
@@ -128,7 +130,7 @@ def api_quick_search():
         # 取所有住宅项目名，Python 层做拼音首字母匹配
         all_names = db.execute(
             f"SELECT DISTINCT project_name FROM housing_units "
-            f"WHERE house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND project_name != '' AND {UNSOLD_RECENCY}"
+            f"WHERE house_usage IN {RESIDENTIAL_TYPES} AND status IN ('期房待售','在建抵押','未售','首次登记') AND total_price > 0 AND project_name != '' AND {UNSOLD_RECENCY}"
         ).fetchall()
         matched = []
         for row in all_names:
@@ -152,7 +154,8 @@ def api_quick_search():
             "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max, "
             "CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = h.project_name AND u.status IN ('首次登记','已转移登记')) THEN '现售' ELSE '预售' END as sale_type "
             "FROM housing_units h "
-            "WHERE h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
+            f"WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
+            f"AND h.total_price > 0 "
             f"AND {UNSOLD_RECENCY} "
             f"AND h.project_name IN ({placeholders}) "
             "GROUP BY h.project_name, h.zone "
@@ -171,7 +174,8 @@ def api_quick_search():
             "ROUND((MAX(h.total_price)/10000)::numeric, 1) as price_max, "
             "CASE WHEN EXISTS (SELECT 1 FROM housing_units u WHERE u.project_name = h.project_name AND u.status IN ('首次登记','已转移登记')) THEN '现售' ELSE '预售' END as sale_type "
             "FROM housing_units h "
-            "WHERE h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
+            f"WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
+            f"AND h.total_price > 0 "
             f"AND {UNSOLD_RECENCY} "
             "AND (h.project_name ILIKE %s OR h.zone ILIKE %s) "
             "GROUP BY h.project_name, h.zone "
@@ -296,7 +300,7 @@ def api_my_subscriptions():
         "MAX(h.zone) as zone "
         "FROM subscriptions s "
         "LEFT JOIN housing_units h ON h.project_name = s.project_name "
-        f"AND h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} "
+        f"AND h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} "
         "WHERE s.openid = %s "
         "GROUP BY s.project_name, s.subscribed_at "
         "ORDER BY s.subscribed_at DESC",
@@ -491,8 +495,8 @@ def api_generate_poster():
         "MAX(p.pass_date) as pass_date "
         "FROM housing_units h "
         "LEFT JOIN presale_permits p ON p.project_name = h.project_name "
-        "WHERE h.project_name = %s AND h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
-        f"AND {UNSOLD_RECENCY} "
+        f"WHERE h.project_name = %s AND h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') "
+        f"AND h.total_price > 0 AND {UNSOLD_RECENCY} "
         "GROUP BY h.project_name, h.zone",
         [project]
     ).fetchone()
@@ -543,7 +547,7 @@ def api_zones():
     """区域列表"""
     db = get_db()
     rows = db.execute(
-        f"SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} ORDER BY zone"
+        f"SELECT DISTINCT zone FROM housing_units WHERE zone != '' AND house_usage IN {RESIDENTIAL_TYPES} AND status IN ('期房待售','在建抵押','未售','首次登记') AND total_price > 0 AND {UNSOLD_RECENCY} ORDER BY zone"
     ).fetchall()
     zones = list(dict.fromkeys(zone_name(r["zone"]) for r in rows))
     zones.sort(key=pinyin_sort_key)
@@ -555,7 +559,7 @@ def api_projects():
     """小区列表，可按区域筛选（仅2019年后开盘 + 有可售房源）"""
     zone = request.args.get("zone", "")
     db = get_db()
-    base_cond = f"h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} AND h.project_name IS NOT NULL AND h.project_name != ''"
+    base_cond = f"h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} AND h.project_name IS NOT NULL AND h.project_name != ''"
     base_cond += f" AND (p.pass_date IS NULL OR p.pass_date >= (CURRENT_DATE - INTERVAL '5 years')::text)"
     if zone:
         rows = db.execute(
@@ -596,7 +600,7 @@ def api_buildings():
     db = get_db()
     rows = db.execute(
         "SELECT DISTINCT building_name FROM housing_units "
-        f"WHERE project_name=%s AND status IN ('期房待售','在建抵押','未售','首次登记') AND house_usage='住宅' AND {UNSOLD_RECENCY} "
+        f"WHERE project_name=%s AND status IN ('期房待售','在建抵押','未售','首次登记') AND house_usage IN {RESIDENTIAL_TYPES} AND total_price > 0 AND {UNSOLD_RECENCY} "
         "ORDER BY building_name",
         [project],
     ).fetchall()
@@ -617,7 +621,7 @@ def api_units():
     search = request.args.get("search", "")
 
     db = get_db()
-    conditions = ["project_name=%s", "house_usage='住宅'", f"status IN {UNSOLD_STATUSES}", UNSOLD_RECENCY]
+    conditions = ["project_name=%s", f"house_usage IN {RESIDENTIAL_TYPES}", f"status IN {UNSOLD_STATUSES}", UNSOLD_RECENCY, "total_price > 0"]
     params = [project]
     has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 999999)
     if has_filter:
@@ -713,7 +717,7 @@ def api_stats():
     
     # 构建条件：仅当用户主动设置筛选时才加价格/面积条件
     # 5 年窗口：只统计近 5 年有房源活动的楼盘
-    conds = ["house_usage='住宅'", UNSOLD_RECENCY]
+    conds = [f"house_usage IN {RESIDENTIAL_TYPES}", UNSOLD_RECENCY]
     params = []
     has_filter = (price_min > 0 or price_max < 999999999 or area_min > 0 or area_max < 9999)
     if has_filter:
@@ -727,8 +731,8 @@ def api_stats():
         p = params + (extra_params or [])
         base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
         row = db.execute(
-            "SELECT COUNT(*) as total, "
-            "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售','首次登记')) as unsold "
+            "SELECT COUNT(*) FILTER (WHERE h.total_price > 0) as total, "
+            "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0) as unsold "
             f"FROM housing_units h "
             f"WHERE {base_where} {extra_cond}", p
         ).fetchone()
@@ -759,10 +763,10 @@ def api_building_stats():
         return jsonify({"buildings": []})
     db = get_db()
     rows = db.execute(
-        "SELECT building_name, COUNT(*) as total, "
-        "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')) as unsold "
+        "SELECT building_name, COUNT(*) FILTER (WHERE total_price > 0) as total, "
+        "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售') AND total_price > 0) as unsold "
         "FROM housing_units "
-        "WHERE project_name=%s AND house_usage='住宅' AND building_name IS NOT NULL AND building_name!='' "
+        f"WHERE project_name=%s AND house_usage IN {RESIDENTIAL_TYPES} AND building_name IS NOT NULL AND building_name!='' "
         f"AND {UNSOLD_RECENCY} "
         "GROUP BY building_name ORDER BY building_name",
         [project]
@@ -790,7 +794,7 @@ def api_top_absorption():
         "SELECT project_name, zone, COUNT(*) as total, "
         "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')) as unsold "
         "FROM housing_units "
-        f"WHERE house_usage='住宅' AND project_name IS NOT NULL AND project_name!='' AND {UNSOLD_RECENCY} "
+        f"WHERE house_usage IN {RESIDENTIAL_TYPES} AND project_name IS NOT NULL AND project_name!='' AND total_price > 0 AND {UNSOLD_RECENCY} "
         "GROUP BY project_name, zone "
         "HAVING COUNT(*) >= 20 "
         "ORDER BY (COUNT(*) - COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售')))::float / COUNT(*) DESC "
@@ -824,7 +828,7 @@ def api_upcoming():
         "ROUND(AVG(h.unit_price)::numeric, 0) as avg_unit "
         "FROM housing_units h "
         "LEFT JOIN presale_permits pp ON h.project_name = pp.project_name "
-        f"WHERE h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} {cond} "
+        f"WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND h.project_name IS NOT NULL AND h.project_name!='' AND h.total_price > 0 AND {UNSOLD_RECENCY} {cond} "
         "GROUP BY h.project_name, h.zone, pp.developer, pp.pass_date "
         "ORDER BY h.project_name, pp.pass_date DESC NULLS LAST "
         "LIMIT 30",
@@ -870,7 +874,7 @@ def api_zone_compare():
         "MAX(pp.pass_date) as pass_date "
         "FROM housing_units h "
         "LEFT JOIN presale_permits pp ON h.project_name = pp.project_name "
-        f"WHERE h.zone=%s AND h.house_usage='住宅' AND h.project_name IS NOT NULL AND h.project_name!='' AND {UNSOLD_RECENCY} "
+        f"WHERE h.zone=%s AND h.house_usage IN {RESIDENTIAL_TYPES} AND h.project_name IS NOT NULL AND h.project_name!='' AND h.total_price > 0 AND {UNSOLD_RECENCY} "
         "GROUP BY h.project_name, h.zone "
         "ORDER BY MAX(pp.pass_date) DESC NULLS LAST LIMIT 5",
         [zone]
@@ -1014,24 +1018,24 @@ def api_overview():
     row = db.execute(
         "SELECT "
         "COUNT(*) as total, "
-        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) as unsold, "
-        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} AND pp.project_name IS NULL THEN 1 ELSE 0 END) as presale, "
-        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} AND pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as spot_sale, "
+        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) as unsold, "
+        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} AND pp.project_name IS NULL THEN 1 ELSE 0 END) as presale, "
+        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} AND pp.project_name IS NOT NULL THEN 1 ELSE 0 END) as spot_sale, "
         "SUM(CASE WHEN h.status IN ('已签认购书','已签合同','已录入合同') THEN 1 ELSE 0 END) as signed, "
         "SUM(CASE WHEN h.status='已备案' THEN 1 ELSE 0 END) as filed, "
         "SUM(CASE WHEN h.status='首次登记' THEN 1 ELSE 0 END) as transferred, "
         f"ROUND((SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.total_price ELSE 0 END) / NULLIF(SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.built_area ELSE 0 END), 0))::numeric, 0) as avg_unit_price, "
         f"ROUND((AVG(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.total_price END)/10000)::numeric, 1) as avg_total, "
         f"ROUND(AVG(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price>0 AND {UNSOLD_RECENCY} THEN h.unit_price END)::numeric, 0) as avg_unit, "
-        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} AND ppr.project_name IS NOT NULL THEN 1 ELSE 0 END) as recent, "
-        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) + "
+        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} AND ppr.project_name IS NOT NULL THEN 1 ELSE 0 END) as recent, "
+        f"SUM(CASE WHEN h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0 AND {UNSOLD_RECENCY} THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN h.status IN ('已签认购书','已签合同','已录入合同') THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN h.status='已备案' THEN 1 ELSE 0 END) + "
         "SUM(CASE WHEN h.status='首次登记' THEN 1 ELSE 0 END) as total "
         "FROM housing_units h "
         "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='首次登记') pp ON pp.project_name = h.project_name "
         f"LEFT JOIN (SELECT DISTINCT project_name FROM presale_permits WHERE pass_date >= (CURRENT_DATE - INTERVAL '1 month')::text) ppr ON ppr.project_name = h.project_name "
-        "WHERE h.house_usage='住宅'"
+        f"WHERE h.house_usage IN {RESIDENTIAL_TYPES}"
     ).fetchone()
 
     # 各区未售住宅统计（仅预售，排除现售）
@@ -1043,7 +1047,7 @@ def api_overview():
         "ROUND(AVG(h.unit_price)::numeric, 0) as avg_u "
         f"FROM housing_units h "
         "LEFT JOIN (SELECT DISTINCT project_name FROM housing_units WHERE status='首次登记') pp ON pp.project_name = h.project_name "
-        f"WHERE h.house_usage='住宅' AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.zone != '' AND {UNSOLD_RECENCY} "
+        f"WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.zone != '' AND h.total_price > 0 AND {UNSOLD_RECENCY} "
         "GROUP BY h.zone ORDER BY cnt DESC"
     ).fetchall()
 
@@ -1114,7 +1118,7 @@ def api_overview():
 def api_rankings():
     """榜单：总价最低/最高 + 单价最低/最高"""
     db = get_db()
-    base = f"WHERE house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND project_name IS NOT NULL AND project_name != '' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
+    base = f"WHERE house_usage IN {RESIDENTIAL_TYPES} AND status IN ('期房待售','在建抵押','未售','首次登记') AND project_name IS NOT NULL AND project_name != '' AND total_price >= 10000 AND unit_price > 0 AND built_area > 0 AND {UNSOLD_RECENCY}"
 
     tab = request.args.get("tab", "cheap_total")
     order_map = {
@@ -1156,7 +1160,7 @@ def api_latest_permits():
     unsold_map = {}
     unsold_rows = db.execute(
         f"SELECT project_name, COUNT(*) as cnt FROM housing_units "
-        f"WHERE house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} "
+        f"WHERE house_usage IN {RESIDENTIAL_TYPES} AND status IN ('期房待售','在建抵押','未售','首次登记') AND {UNSOLD_RECENCY} "
         f"GROUP BY project_name"
     ).fetchall()
     for r in unsold_rows:
@@ -1572,7 +1576,7 @@ def api_admin_status():
     # 各区可售住宅
     zone_rows = db.execute(
         "SELECT zone, COUNT(*) as cnt FROM housing_units "
-        f"WHERE house_usage='住宅' AND status IN ('期房待售','在建抵押','未售','首次登记') AND zone != '' AND {UNSOLD_RECENCY} "
+        f"WHERE house_usage IN {RESIDENTIAL_TYPES} AND status IN ('期房待售','在建抵押','未售','首次登记') AND zone != '' AND total_price > 0 AND {UNSOLD_RECENCY} "
         "GROUP BY zone ORDER BY cnt DESC"
     ).fetchall()
 
@@ -1844,7 +1848,7 @@ def api_project_absorption():
             MAX(p.pass_date) as permit_date
         FROM housing_units h
         LEFT JOIN presale_permits p ON p.project_name = h.project_name
-        WHERE h.house_usage = '住宅' AND {UNSOLD_RECENCY} {cond}
+        WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND {UNSOLD_RECENCY} {cond}
         GROUP BY h.project_name, h.zone
         ORDER BY permit_date DESC NULLS LAST, total DESC
     """, params).fetchall()
@@ -1873,7 +1877,7 @@ def api_building_absorption():
             COUNT(*) as total,
             SUM(CASE WHEN h.status IN {SOLD_STATUSES} THEN 1 ELSE 0 END) as sold
         FROM housing_units h
-        WHERE {cond}
+        WHERE h.house_usage IN {RESIDENTIAL_TYPES} AND {cond}
         GROUP BY h.building_name
         ORDER BY h.building_name
     """, [param]).fetchall()
@@ -1911,7 +1915,7 @@ def api_project_stats():
             SUM(CASE WHEN status IN {UNSOLD_STATUSES} THEN 1 ELSE 0 END) as unsold,
             ROUND(AVG(unit_price)::numeric, 0) as avg_unit_price
         FROM housing_units
-        WHERE house_usage = '住宅' AND {stats_cond}
+        WHERE house_usage IN {RESIDENTIAL_TYPES} AND total_price > 0 AND {stats_cond}
     """, [param]).fetchone()
     return jsonify({
         "project_name": row["project_name"], "zone": row["zone"],
