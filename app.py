@@ -731,7 +731,7 @@ def api_stats():
         p = params + (extra_params or [])
         base_where = where_extra[5:] if where_extra.startswith(" AND ") else "TRUE"
         row = db.execute(
-            "SELECT COUNT(*) FILTER (WHERE h.total_price > 0) as total, "
+            "SELECT COUNT(*) as total, "
             "COUNT(*) FILTER (WHERE h.status IN ('期房待售','在建抵押','未售','首次登记') AND h.total_price > 0) as unsold "
             f"FROM housing_units h "
             f"WHERE {base_where} {extra_cond}", p
