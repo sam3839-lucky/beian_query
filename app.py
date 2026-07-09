@@ -763,7 +763,7 @@ def api_building_stats():
         return jsonify({"buildings": []})
     db = get_db()
     rows = db.execute(
-        "SELECT building_name, COUNT(*) FILTER (WHERE total_price > 0) as total, "
+        "SELECT building_name, COUNT(*) as total, "
         "COUNT(*) FILTER (WHERE status IN ('期房待售','在建抵押','未售') AND total_price > 0) as unsold "
         "FROM housing_units "
         f"WHERE project_name=%s AND house_usage IN {RESIDENTIAL_TYPES} AND building_name IS NOT NULL AND building_name!='' "
