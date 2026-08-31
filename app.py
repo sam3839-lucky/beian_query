@@ -9,7 +9,7 @@ import re
 import psycopg2
 import psycopg2.extras
 from flask import Flask, request, jsonify, g, send_file
-from datetime import datetime
+from datetime import datetime, date
 from pypinyin import pinyin, Style
 import poster
 
@@ -1198,6 +1198,482 @@ def api_latest_permits():
 # ═══════════════════════════════════════════
 # 成交分析 API（数据源: transaction_data + monthly_aggregation）
 # ═══════════════════════════════════════════
+
+def _normalize_date(value, field_name="date"):
+    """将 PostgreSQL DATE 等输入严格规范为 ``datetime.date``。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a valid YYYY-MM-DD date") from exc
+    raise ValueError(f"{field_name} must be date, datetime, or YYYY-MM-DD")
+
+
+def _comparison_period_end(year, month, day):
+    """返回目标年份的同月同日；目标月较短时自然收敛到月末。"""
+    if day < 1:
+        raise ValueError("day must be positive")
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(day, last_day))
+
+
+TRANSACTION_COVERAGE_GAP_DAYS = 31
+
+
+def _get_transaction_coverage(db):
+    """快速读取房型全局起止日期；连续覆盖在限定查询窗口内计算。"""
+    rows = db.execute(
+        "SELECT pt.code as property_type, "
+        "MIN(t.report_date) as available_from, "
+        "MAX(t.report_date) as available_to "
+        "FROM transaction_data t "
+        "JOIN property_types pt ON pt.id = t.property_type_id "
+        "WHERE t.city_id = %s AND t.district_id != %s "
+        "AND t.report_date IS NOT NULL "
+        "AND pt.code IN ('new', 'used') "
+        "GROUP BY pt.code",
+        [1, 5999],
+    ).fetchall()
+
+    coverage = {
+        "new": {
+            "available_from": None,
+            "available_to": None,
+            "continuous_from": None,
+        },
+        "used": {
+            "available_from": None,
+            "available_to": None,
+            "continuous_from": None,
+        },
+    }
+    for row in rows:
+        property_type = row.get("property_type")
+        if property_type not in coverage:
+            continue
+        available_from = _normalize_date(
+            row.get("available_from"), f"{property_type}.available_from"
+        )
+        coverage[property_type] = {
+            "available_from": available_from,
+            "available_to": _normalize_date(
+                row.get("available_to"), f"{property_type}.available_to"
+            ),
+            "continuous_from": None,
+        }
+
+    latest_dates = [
+        coverage[property_type]["available_to"]
+        for property_type in ("new", "used")
+        if coverage[property_type]["available_to"] is not None
+    ]
+    coverage["common_latest"] = (
+        min(latest_dates) if len(latest_dates) == 2 else None
+    )
+    return coverage
+
+
+def _query_transaction_comparison(db, years, common_latest):
+    """一次读取所需年份的日聚合数据，后续口径由纯函数组装。"""
+    common_latest = _normalize_date(common_latest, "common_latest")
+    if common_latest is None:
+        return []
+    if years not in (3, 5):
+        raise ValueError("years must be 3 or 5")
+
+    start_date = date(common_latest.year - years + 1, 1, 1)
+    return db.execute(
+        "SELECT t.report_date, pt.code as property_type, "
+        "SUM(t.deal_count) as deal_count "
+        "FROM transaction_data t "
+        "JOIN property_types pt ON pt.id = t.property_type_id "
+        "WHERE t.city_id = %s AND t.district_id != %s "
+        "AND pt.code IN ('new', 'used') "
+        "AND t.report_date >= %s AND t.report_date <= %s "
+        "GROUP BY t.report_date, pt.code "
+        "ORDER BY t.report_date, pt.code",
+        [1, 5999, start_date, common_latest],
+    ).fetchall()
+
+
+def _apply_continuous_coverage(rows, coverage, common_latest, years):
+    """在近3/5年查询窗口内识别最后一次超过31天的内部断档。"""
+    common_latest = _normalize_date(common_latest, "common_latest")
+    result = {
+        property_type: dict(coverage.get(property_type) or {})
+        for property_type in ("new", "used")
+    }
+    result["common_latest"] = common_latest
+    if common_latest is None:
+        return result
+
+    window_start = date(common_latest.year - years + 1, 1, 1)
+    observed_dates = {"new": set(), "used": set()}
+    for row in rows:
+        property_type = row.get("property_type")
+        report_date = _normalize_date(row.get("report_date"), "report_date")
+        if (
+            property_type in observed_dates
+            and report_date is not None
+            and window_start <= report_date <= common_latest
+        ):
+            observed_dates[property_type].add(report_date)
+
+    for property_type in ("new", "used"):
+        dates = sorted(observed_dates[property_type])
+        available_from = _normalize_date(
+            result[property_type].get("available_from"),
+            f"{property_type}.available_from",
+        )
+        coverage_start = max(window_start, available_from or window_start)
+        continuous_from = None
+        if dates:
+            continuous_from = (
+                dates[0]
+                if (dates[0] - coverage_start).days
+                > TRANSACTION_COVERAGE_GAP_DAYS
+                else coverage_start
+            )
+            for previous_date, current_date in zip(dates, dates[1:]):
+                if (
+                    current_date - previous_date
+                ).days > TRANSACTION_COVERAGE_GAP_DAYS:
+                    continuous_from = current_date
+        result[property_type]["continuous_from"] = continuous_from
+    return result
+
+
+def _date_iso(value):
+    return value.isoformat() if value is not None else None
+
+
+def _normalize_transaction_coverage(coverage):
+    normalized = {}
+    for property_type in ("new", "used"):
+        raw = coverage.get(property_type) or {}
+        available_from = _normalize_date(
+            raw.get("available_from"), f"{property_type}.available_from"
+        )
+        continuous_from = (
+            raw.get("continuous_from")
+            if "continuous_from" in raw
+            else available_from
+        )
+        normalized[property_type] = {
+            "available_from": available_from,
+            "available_to": _normalize_date(
+                raw.get("available_to"), f"{property_type}.available_to"
+            ),
+            "continuous_from": _normalize_date(
+                continuous_from,
+                f"{property_type}.continuous_from",
+            ),
+        }
+    return normalized
+
+
+def _index_transaction_rows(rows):
+    daily = {}
+    for row in rows:
+        report_date = _normalize_date(row.get("report_date"), "report_date")
+        property_type = row.get("property_type")
+        deal_count = row.get("deal_count")
+        if (
+            report_date is None
+            or property_type not in ("new", "used")
+            or deal_count is None
+        ):
+            continue
+        day_values = daily.setdefault(report_date, {})
+        day_values[property_type] = (
+            day_values.get(property_type, 0) + int(deal_count)
+        )
+    return daily
+
+
+def _transaction_metric_sum(
+    daily, coverage, property_type, start_date, end_date
+):
+    metric_coverage = coverage[property_type]
+    continuous_from = metric_coverage["continuous_from"]
+    available_to = metric_coverage["available_to"]
+    if (
+        continuous_from is None
+        or available_to is None
+        or start_date < continuous_from
+        or end_date > available_to
+    ):
+        return None
+
+    values = [
+        day_values[property_type]
+        for report_date, day_values in daily.items()
+        if start_date <= report_date <= end_date
+        and property_type in day_values
+    ]
+    return sum(values) if values else None
+
+
+def _build_transaction_point(
+    daily, coverage, year, month, start_date, end_date, period_status
+):
+    new_count = _transaction_metric_sum(
+        daily, coverage, "new", start_date, end_date
+    )
+    used_count = _transaction_metric_sum(
+        daily, coverage, "used", start_date, end_date
+    )
+    missing_metrics = [
+        property_type
+        for property_type, value in (("new", new_count), ("used", used_count))
+        if value is None
+    ]
+    data_complete = not missing_metrics
+    return {
+        "year": year,
+        "month": month,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "period_status": period_status,
+        "new": new_count,
+        "used": used_count,
+        "total": new_count + used_count if data_complete else None,
+        "data_complete": data_complete,
+        "comparable": data_complete,
+        "missing_metrics": missing_metrics,
+    }
+
+
+def _build_monthly_same_period(
+    daily, coverage, selected_years, common_latest
+):
+    current_month_full = (
+        common_latest.day
+        == calendar.monthrange(common_latest.year, common_latest.month)[1]
+    )
+    result = []
+    for month in range(1, common_latest.month + 1):
+        is_cutoff_month = month == common_latest.month
+        period_status = (
+            "through_day"
+            if is_cutoff_month and not current_month_full
+            else "full_month"
+        )
+        month_rows = []
+        for year in selected_years:
+            start_date = date(year, month, 1)
+            end_date = (
+                _comparison_period_end(year, month, common_latest.day)
+                if is_cutoff_month
+                else date(year, month, calendar.monthrange(year, month)[1])
+            )
+            month_rows.append(
+                _build_transaction_point(
+                    daily,
+                    coverage,
+                    year,
+                    month,
+                    start_date,
+                    end_date,
+                    period_status,
+                )
+            )
+        result.append(
+            {"month": month, "period_status": period_status, "rows": month_rows}
+        )
+    return result
+
+
+def _build_year_to_date(daily, coverage, selected_years, common_latest):
+    period_status = (
+        "full_year"
+        if common_latest.month == 12 and common_latest.day == 31
+        else "through_day"
+    )
+    return [
+        _build_transaction_point(
+            daily,
+            coverage,
+            year,
+            common_latest.month,
+            date(year, 1, 1),
+            _comparison_period_end(
+                year, common_latest.month, common_latest.day
+            ),
+            period_status,
+        )
+        for year in selected_years
+    ]
+
+
+def _build_continuous_months(daily, coverage, common_latest):
+    current_month_full = (
+        common_latest.day
+        == calendar.monthrange(common_latest.year, common_latest.month)[1]
+    )
+    result = []
+    cursor_year = common_latest.year - 1
+    cursor_month = 1
+    while (cursor_year, cursor_month) <= (
+        common_latest.year,
+        common_latest.month,
+    ):
+        start_date = date(cursor_year, cursor_month, 1)
+        is_latest_month = (
+            cursor_year == common_latest.year
+            and cursor_month == common_latest.month
+        )
+        if is_latest_month:
+            end_date = common_latest
+            period_status = (
+                "full_month" if current_month_full else "through_day"
+            )
+        else:
+            end_date = date(
+                cursor_year,
+                cursor_month,
+                calendar.monthrange(cursor_year, cursor_month)[1],
+            )
+            period_status = "full_month"
+        result.append(
+            _build_transaction_point(
+                daily,
+                coverage,
+                cursor_year,
+                cursor_month,
+                start_date,
+                end_date,
+                period_status,
+            )
+        )
+        if cursor_month == 12:
+            cursor_year += 1
+            cursor_month = 1
+        else:
+            cursor_month += 1
+    return result
+
+
+def _build_transaction_comparison_payload(rows, years, coverage, common_latest):
+    """组装月度同期、年度同期和连续走势的稳定响应契约。"""
+    if years not in (3, 5):
+        raise ValueError("years must be 3 or 5")
+
+    common_latest = _normalize_date(common_latest, "common_latest")
+    normalized_coverage = _normalize_transaction_coverage(coverage)
+    coverage_payload = {
+        property_type: {
+            "available_from": _date_iso(data["available_from"]),
+            "available_to": _date_iso(data["available_to"]),
+            "continuous_from": _date_iso(data["continuous_from"]),
+        }
+        for property_type, data in normalized_coverage.items()
+    }
+    updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    if common_latest is None:
+        return {
+            "latest_date": None,
+            "updated_at": updated_at,
+            "data_dates": {
+                "new": _date_iso(normalized_coverage["new"]["available_to"]),
+                "used": _date_iso(normalized_coverage["used"]["available_to"]),
+                "common": None,
+            },
+            "cutoff": None,
+            "years": [],
+            "coverage": coverage_payload,
+            "monthly_same_period": [],
+            "year_to_date": [],
+            "continuous_months": [],
+        }
+
+    selected_years = list(
+        range(common_latest.year, common_latest.year - years, -1)
+    )
+    daily = _index_transaction_rows(rows)
+    return {
+        "latest_date": common_latest.isoformat(),
+        "updated_at": updated_at,
+        "data_dates": {
+            "new": _date_iso(normalized_coverage["new"]["available_to"]),
+            "used": _date_iso(normalized_coverage["used"]["available_to"]),
+            "common": common_latest.isoformat(),
+        },
+        "cutoff": {"month": common_latest.month, "day": common_latest.day},
+        "years": selected_years,
+        "coverage": coverage_payload,
+        "monthly_same_period": _build_monthly_same_period(
+            daily, normalized_coverage, selected_years, common_latest
+        ),
+        "year_to_date": _build_year_to_date(
+            daily, normalized_coverage, selected_years, common_latest
+        ),
+        "continuous_months": _build_continuous_months(
+            daily, normalized_coverage, common_latest
+        ),
+    }
+
+
+@app.route("/api/transactions/comparison")
+def api_transactions_comparison():
+    """同月跨年、年度同期和连续月度的统一只读数据契约。"""
+    raw_years = request.args.get("years", "5")
+    if raw_years not in ("3", "5"):
+        return jsonify({
+            "error": {
+                "code": "INVALID_YEARS",
+                "message": "years must be 3 or 5",
+            }
+        }), 400
+    years = int(raw_years)
+
+    db = get_db()
+    coverage = _get_transaction_coverage(db)
+    common_latest = coverage.get("common_latest")
+
+    import time
+    coverage_signature = tuple(
+        (
+            property_type,
+            _date_iso((coverage.get(property_type) or {}).get("available_from")),
+            _date_iso((coverage.get(property_type) or {}).get("available_to")),
+        )
+        for property_type in ("new", "used")
+    )
+    cache_key = (
+        years,
+        common_latest.isoformat() if common_latest is not None else None,
+        coverage_signature,
+    )
+    now = time.time()
+    cached = getattr(api_transactions_comparison, "_cache", None)
+    if (
+        cached
+        and cached.get("key") == cache_key
+        and now - cached.get("ts", 0) < 600
+    ):
+        return jsonify(cached["data"])
+
+    rows = _query_transaction_comparison(db, years, common_latest)
+    coverage = _apply_continuous_coverage(
+        rows, coverage, common_latest, years
+    )
+    payload = _build_transaction_comparison_payload(
+        rows, years, coverage, common_latest
+    )
+    api_transactions_comparison._cache = {
+        "key": cache_key,
+        "data": payload,
+        "ts": now,
+    }
+    return jsonify(payload)
+
 
 @app.route("/api/transactions/summary")
 def api_transactions_summary():
