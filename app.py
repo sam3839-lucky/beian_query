@@ -74,6 +74,92 @@ def ensure_indexes():
     """PostgreSQL 索引已在建表时创建，跳过"""
 
 
+DESTOCKING_STALE_DAYS = 30
+
+
+def _destocking_conclusion(months):
+    if months is None:
+        return "暂无数据"
+    if months < 6:
+        return "供不应求"
+    if months <= 12:
+        return "供需平衡"
+    if months <= 18:
+        return "去化承压"
+    return "严重滞销"
+
+
+def _destocking_status(row, stat_date):
+    inventory = row.get("inventory_count")
+    deals = row.get("deal_90d")
+    if inventory is None:
+        return "no_inventory"
+    if not isinstance(inventory, (int, float)) or inventory < 0:
+        return "unavailable"
+    if deals is None:
+        return "unavailable"
+    if not isinstance(deals, (int, float)) or deals < 0:
+        return "unavailable"
+    if inventory == 0:
+        return "no_inventory"
+    if deals == 0:
+        return "no_deal"
+    age = row.get("inventory_age_days")
+    if age is not None and age > DESTOCKING_STALE_DAYS:
+        return "stale"
+    if row.get("inventory_filled"):
+        return "forward_filled"
+    return "ok"
+
+
+def _destocking_payload(rows, loaded_at=None):
+    """Normalize one batched monthly_metrics/inventory query into API data."""
+    if not rows:
+        return None
+    stat_date = rows[0].get("stat_date")
+    stat_date = stat_date.isoformat() if hasattr(stat_date, "isoformat") else str(stat_date)
+    district_rows = [r for r in rows if r.get("district_id") != 5999]
+    city_row = next((r for r in rows if r.get("district_id") == 5999), None)
+
+    def serialize(row):
+        normalized = dict(row)
+        normalized["stat_date"] = stat_date
+        inventory_as_of = normalized.get("inventory_as_of")
+        if hasattr(inventory_as_of, "isoformat"):
+            normalized["inventory_as_of"] = inventory_as_of.isoformat()
+        normalized["inventory_filled"] = bool(normalized.get("inventory_filled"))
+        normalized["inventory_age_days"] = int(normalized["inventory_age_days"] or 0)
+        normalized["status"] = _destocking_status(normalized, stat_date)
+        months = normalized.get("months")
+        normalized["months"] = round(float(months), 1) if months is not None else None
+        normalized["daily_avg"] = round(float(normalized["daily_avg"]), 1) if normalized.get("daily_avg") is not None else None
+        normalized["conclusion"] = normalized.get("conclusion") or _destocking_conclusion(normalized["months"])
+        normalized.pop("district_id", None)
+        normalized.pop("stat_date", None)
+        return normalized
+
+    available = len([r for r in district_rows if _destocking_status(r, stat_date) != "unavailable"])
+    expected = max([r.get("expected_districts", 0) for r in rows] or [0])
+    data_status = "partial" if expected and available < expected else "ok"
+    city = serialize(city_row) if city_row else None
+    if city:
+        city["status"] = data_status if city["status"] == "ok" and data_status == "partial" else city["status"]
+
+    return {
+        "schema_version": 1,
+        "window_days": 90,
+        "data_as_of": stat_date,
+        "loaded_at": loaded_at or datetime.now().astimezone().isoformat(),
+        "data_status": data_status,
+        "coverage": {"available": available, "expected": expected},
+        "citywide": city,
+        "districts": sorted(
+            [serialize(r) for r in district_rows],
+            key=lambda r: (r["months"] is None, r["months"] if r["months"] is not None else 0, r.get("district_name", "")),
+        ),
+    }
+
+
 # ═══════════════════════════════════════════
 # 页面
 # ═══════════════════════════════════════════
@@ -111,6 +197,80 @@ def wx_login():
 # ═══════════════════════════════════════════
 # API
 # ═══════════════════════════════════════════
+
+@app.route("/api/new-house-destocking")
+def api_new_house_destocking():
+    """最近90天新房去化周期；一次批量读取指标与库存快照。"""
+    import time
+
+    cached = getattr(api_new_house_destocking, "_cache", None)
+    if cached and time.time() - cached["ts"] < 60:
+        return jsonify(cached["data"])
+
+    try:
+        db = get_db()
+        rows = db.execute(
+            """
+            WITH latest AS (
+                SELECT MAX(stat_date) AS stat_date
+                FROM monthly_metrics
+                WHERE city_id = 1 AND property_type = 'new'
+            ), expected AS (
+                SELECT COUNT(*) AS expected_districts
+                FROM districts
+                WHERE city_id = 1 AND id != 5999 AND name <> '全市'
+            ), inventory_ranked AS (
+                SELECT i.district_id, i.report_date, i.available_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY i.district_id ORDER BY i.report_date DESC
+                       ) AS rn
+                FROM inventory_data i
+                CROSS JOIN latest l
+                WHERE i.city_id = 1 AND i.property_type_id = 1
+                  AND i.report_date <= l.stat_date
+            )
+            SELECT mm.district_id,
+                   CASE WHEN mm.district_id = 5999 THEN '全市'
+                        ELSE COALESCE(d.name, '') END AS district_name,
+                   mm.stat_date,
+                   mm.inventory_count,
+                   mm.deal_last_90_days AS deal_90d,
+                   mm.daily_avg,
+                   mm.destocking_months AS months,
+                   mm.conclusion_3m AS conclusion,
+                   ir.report_date AS inventory_as_of,
+                   (ir.report_date < mm.stat_date) AS inventory_filled,
+                   (mm.stat_date - ir.report_date) AS inventory_age_days,
+                   e.expected_districts
+            FROM monthly_metrics mm
+            CROSS JOIN expected e
+            LEFT JOIN districts d ON d.id = mm.district_id
+            LEFT JOIN inventory_ranked ir
+              ON ir.district_id = mm.district_id AND ir.rn = 1
+            WHERE mm.city_id = 1 AND mm.property_type = 'new'
+              AND mm.stat_date = (SELECT stat_date FROM latest)
+            ORDER BY mm.district_id
+            """
+        ).fetchall()
+        payload = _destocking_payload(rows)
+        if payload is None:
+            return jsonify({
+                "schema_version": 1,
+                "window_days": 90,
+                "data_status": "unavailable",
+                "coverage": {"available": 0, "expected": 0},
+                "citywide": None,
+                "districts": [],
+            })
+        api_new_house_destocking._cache = {"ts": time.time(), "data": payload}
+        return jsonify(payload)
+    except Exception:
+        return jsonify({
+            "error": {
+                "code": "DESTOCKING_UNAVAILABLE",
+                "message": "新房去化数据暂时不可用，请稍后重试",
+            }
+        }), 503
 
 @app.route("/api/quick-search")
 def api_quick_search():
